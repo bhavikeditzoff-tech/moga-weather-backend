@@ -8,6 +8,10 @@ app.use(cors());
 
 const WEATHERAPI_KEY = process.env.WEATHERAPI_KEY;
 
+// Exact Moga, Punjab, India coordinates
+const LAT = 30.8165;
+const LON = 75.1717;
+
 app.get("/", (req, res) => {
   res.send("Moga weather backend is running");
 });
@@ -24,13 +28,14 @@ function firstAvailable(...values) {
 app.get("/api/weather", async (req, res) => {
   try {
     const openMeteoWeatherUrl =
-      "https://api.open-meteo.com/v1/forecast?latitude=30.8165&longitude=75.1717&current=temperature_2m,wind_speed_10m,wind_direction_10m,weather_code,is_day,relative_humidity_2m,apparent_temperature,surface_pressure&hourly=temperature_2m,weather_code,is_day,visibility&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset,uv_index_max&timezone=auto";
+      `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}&current=temperature_2m,wind_speed_10m,wind_direction_10m,weather_code,is_day,relative_humidity_2m,apparent_temperature,surface_pressure&hourly=temperature_2m,weather_code,is_day,visibility&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset,uv_index_max&timezone=auto&forecast_days=7`;
 
     const openMeteoAirUrl =
-      "https://air-quality-api.open-meteo.com/v1/air-quality?latitude=30.8165&longitude=75.1717&hourly=pm2_5&timezone=auto";
+      `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${LAT}&longitude=${LON}&hourly=pm2_5&timezone=auto`;
 
+    // Use exact coordinates instead of "Moga"
     const weatherApiUrl =
-      `https://api.weatherapi.com/v1/forecast.json?key=${WEATHERAPI_KEY}&q=Moga&days=7&aqi=yes&alerts=no`;
+      `https://api.weatherapi.com/v1/forecast.json?key=${WEATHERAPI_KEY}&q=${LAT},${LON}&days=7&aqi=yes&alerts=no`;
 
     const [openMeteoWeatherResponse, openMeteoAirResponse, weatherApiResponse] = await Promise.all([
       fetch(openMeteoWeatherUrl),
@@ -42,13 +47,17 @@ app.get("/api/weather", async (req, res) => {
     const openMeteoAir = await openMeteoAirResponse.json();
     const weatherApiData = await weatherApiResponse.json();
 
+    console.log("OPEN METEO WEATHER:", JSON.stringify(openMeteoWeather, null, 2));
+    console.log("OPEN METEO AIR:", JSON.stringify(openMeteoAir, null, 2));
+    console.log("WEATHER API:", JSON.stringify(weatherApiData, null, 2));
+
     const mergedData = {
       location: {
         name: firstAvailable(weatherApiData.location?.name, "Moga"),
         region: firstAvailable(weatherApiData.location?.region, "Punjab"),
         country: firstAvailable(weatherApiData.location?.country, "India"),
-        latitude: firstAvailable(weatherApiData.location?.lat, 30.8165),
-        longitude: firstAvailable(weatherApiData.location?.lon, 75.1717)
+        latitude: firstAvailable(weatherApiData.location?.lat, LAT),
+        longitude: firstAvailable(weatherApiData.location?.lon, LON)
       },
 
       current: {
@@ -115,6 +124,13 @@ app.get("/api/weather", async (req, res) => {
         weather_code: openMeteoWeather.hourly?.weather_code || [],
         is_day: openMeteoWeather.hourly?.is_day || [],
         visibility: openMeteoWeather.hourly?.visibility || []
+      },
+
+      debug: {
+        openMeteoDailyExists: !!openMeteoWeather.daily,
+        openMeteoHourlyExists: !!openMeteoWeather.hourly,
+        openMeteoDailyTimeCount: openMeteoWeather.daily?.time?.length || 0,
+        openMeteoHourlyTimeCount: openMeteoWeather.hourly?.time?.length || 0
       },
 
       source: {
