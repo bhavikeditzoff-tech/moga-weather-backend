@@ -8,7 +8,6 @@ app.use(cors());
 
 const WEATHERAPI_KEY = process.env.WEATHERAPI_KEY;
 
-// Exact Moga, Punjab, India coordinates
 const LAT = 30.8165;
 const LON = 75.1717;
 
@@ -25,6 +24,78 @@ function firstAvailable(...values) {
   return null;
 }
 
+function mapWeatherApiConditionToCode(text) {
+  const lower = (text || "").toLowerCase();
+
+  if (lower.includes("sunny") || lower.includes("clear")) return 0;
+  if (lower.includes("partly cloudy")) return 2;
+  if (lower.includes("cloudy")) return 3;
+  if (lower.includes("overcast")) return 3;
+  if (lower.includes("fog") || lower.includes("mist")) return 45;
+  if (lower.includes("drizzle")) return 53;
+  if (lower.includes("rain")) return 63;
+  if (lower.includes("shower")) return 80;
+  if (lower.includes("thunder")) return 95;
+  if (lower.includes("snow")) return 73;
+
+  return 0;
+}
+
+function buildDailyFromWeatherApi(weatherApiData) {
+  const forecastDays = weatherApiData.forecast?.forecastday || [];
+
+  return {
+    time: forecastDays.map(day => day.date),
+    weather_code: forecastDays.map(day => mapWeatherApiConditionToCode(day.day?.condition?.text)),
+    temperature_2m_max: forecastDays.map(day => day.day?.maxtemp_c),
+    temperature_2m_min: forecastDays.map(day => day.day?.mintemp_c),
+    precipitation_probability_max: forecastDays.map(day => day.day?.daily_chance_of_rain ?? 0),
+    sunrise: forecastDays.map(day => `${day.date}T${convert12hTo24h(day.astro?.sunrise)}`),
+    sunset: forecastDays.map(day => `${day.date}T${convert12hTo24h(day.astro?.sunset)}`),
+    uv_index_max: forecastDays.map(day => day.day?.uv ?? 0)
+  };
+}
+
+function buildHourlyFromWeatherApi(weatherApiData) {
+  const forecastDays = weatherApiData.forecast?.forecastday || [];
+  const hourly = {
+    time: [],
+    temperature_2m: [],
+    weather_code: [],
+    is_day: [],
+    visibility: []
+  };
+
+  forecastDays.forEach(day => {
+    const hours = day.hour || [];
+    hours.forEach(hour => {
+      hourly.time.push(hour.time);
+      hourly.temperature_2m.push(hour.temp_c);
+      hourly.weather_code.push(mapWeatherApiConditionToCode(hour.condition?.text));
+      hourly.is_day.push(hour.is_day);
+      hourly.visibility.push((hour.vis_km ?? 0) * 1000);
+    });
+  });
+
+  return hourly;
+}
+
+function convert12hTo24h(time12h) {
+  if (!time12h) return "00:00";
+  const [time, modifier] = time12h.split(" ");
+  let [hours, minutes] = time.split(":");
+
+  if (hours === "12") {
+    hours = "00";
+  }
+
+  if (modifier === "PM") {
+    hours = String(parseInt(hours, 10) + 12);
+  }
+
+  return `${hours.padStart(2, "0")}:${minutes}:00`;
+}
+
 app.get("/api/weather", async (req, res) => {
   try {
     const openMeteoWeatherUrl =
@@ -33,7 +104,6 @@ app.get("/api/weather", async (req, res) => {
     const openMeteoAirUrl =
       `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${LAT}&longitude=${LON}&hourly=pm2_5&timezone=auto`;
 
-    // Use exact coordinates instead of "Moga"
     const weatherApiUrl =
       `https://api.weatherapi.com/v1/forecast.json?key=${WEATHERAPI_KEY}&q=${LAT},${LON}&days=7&aqi=yes&alerts=no`;
 
@@ -47,9 +117,27 @@ app.get("/api/weather", async (req, res) => {
     const openMeteoAir = await openMeteoAirResponse.json();
     const weatherApiData = await weatherApiResponse.json();
 
-    console.log("OPEN METEO WEATHER:", JSON.stringify(openMeteoWeather, null, 2));
-    console.log("OPEN METEO AIR:", JSON.stringify(openMeteoAir, null, 2));
-    console.log("WEATHER API:", JSON.stringify(weatherApiData, null, 2));
+    const fallbackDaily = buildDailyFromWeatherApi(weatherApiData);
+    const fallbackHourly = buildHourlyFromWeatherApi(weatherApiData);
+
+    const dailyData = openMeteoWeather.daily?.time?.length ? {
+      time: openMeteoWeather.daily.time || [],
+      weather_code: openMeteoWeather.daily.weather_code || [],
+      temperature_2m_max: openMeteoWeather.daily.temperature_2m_max || [],
+      temperature_2m_min: openMeteoWeather.daily.temperature_2m_min || [],
+      precipitation_probability_max: openMeteoWeather.daily.precipitation_probability_max || [],
+      sunrise: openMeteoWeather.daily.sunrise || [],
+      sunset: openMeteoWeather.daily.sunset || [],
+      uv_index_max: openMeteoWeather.daily.uv_index_max || []
+    } : fallbackDaily;
+
+    const hourlyData = openMeteoWeather.hourly?.time?.length ? {
+      time: openMeteoWeather.hourly.time || [],
+      temperature_2m: openMeteoWeather.hourly.temperature_2m || [],
+      weather_code: openMeteoWeather.hourly.weather_code || [],
+      is_day: openMeteoWeather.hourly.is_day || [],
+      visibility: openMeteoWeather.hourly.visibility || []
+    } : fallbackHourly;
 
     const mergedData = {
       location: {
@@ -91,7 +179,7 @@ app.get("/api/weather", async (req, res) => {
         ),
         weather_code: firstAvailable(
           openMeteoWeather.current?.weather_code,
-          0
+          mapWeatherApiConditionToCode(weatherApiData.current?.condition?.text)
         ),
         condition_text: firstAvailable(
           weatherApiData.current?.condition?.text,
@@ -99,7 +187,7 @@ app.get("/api/weather", async (req, res) => {
         ),
         uv: firstAvailable(
           weatherApiData.current?.uv,
-          openMeteoWeather.daily?.uv_index_max?.[0]
+          dailyData.uv_index_max?.[0]
         ),
         air_quality_pm25: firstAvailable(
           openMeteoAir.hourly?.pm2_5?.[0],
@@ -107,30 +195,16 @@ app.get("/api/weather", async (req, res) => {
         )
       },
 
-      daily: {
-        time: openMeteoWeather.daily?.time || [],
-        weather_code: openMeteoWeather.daily?.weather_code || [],
-        temperature_2m_max: openMeteoWeather.daily?.temperature_2m_max || [],
-        temperature_2m_min: openMeteoWeather.daily?.temperature_2m_min || [],
-        precipitation_probability_max: openMeteoWeather.daily?.precipitation_probability_max || [],
-        sunrise: openMeteoWeather.daily?.sunrise || [],
-        sunset: openMeteoWeather.daily?.sunset || [],
-        uv_index_max: openMeteoWeather.daily?.uv_index_max || []
-      },
-
-      hourly: {
-        time: openMeteoWeather.hourly?.time || [],
-        temperature_2m: openMeteoWeather.hourly?.temperature_2m || [],
-        weather_code: openMeteoWeather.hourly?.weather_code || [],
-        is_day: openMeteoWeather.hourly?.is_day || [],
-        visibility: openMeteoWeather.hourly?.visibility || []
-      },
+      daily: dailyData,
+      hourly: hourlyData,
 
       debug: {
         openMeteoDailyExists: !!openMeteoWeather.daily,
         openMeteoHourlyExists: !!openMeteoWeather.hourly,
         openMeteoDailyTimeCount: openMeteoWeather.daily?.time?.length || 0,
-        openMeteoHourlyTimeCount: openMeteoWeather.hourly?.time?.length || 0
+        openMeteoHourlyTimeCount: openMeteoWeather.hourly?.time?.length || 0,
+        usingWeatherApiDailyFallback: !openMeteoWeather.daily?.time?.length,
+        usingWeatherApiHourlyFallback: !openMeteoWeather.hourly?.time?.length
       },
 
       source: {
