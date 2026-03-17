@@ -56,60 +56,66 @@ app.get("/api/weather", async (req, res) => {
           openMeteoWeather.current?.temperature_2m,
           weatherApiData.current?.temp_c
         ),
-
         feelslike_c: firstAvailable(
           openMeteoWeather.current?.apparent_temperature,
           weatherApiData.current?.feelslike_c
         ),
-
         humidity: firstAvailable(
           openMeteoWeather.current?.relative_humidity_2m,
           weatherApiData.current?.humidity
         ),
-
         wind_kph: firstAvailable(
           openMeteoWeather.current?.wind_speed_10m,
           weatherApiData.current?.wind_kph
         ),
-
         wind_degree: firstAvailable(
           openMeteoWeather.current?.wind_direction_10m,
           weatherApiData.current?.wind_degree
         ),
-
         pressure_hpa: firstAvailable(
           openMeteoWeather.current?.surface_pressure,
           weatherApiData.current?.pressure_mb
         ),
-
         is_day: firstAvailable(
           openMeteoWeather.current?.is_day,
           weatherApiData.current?.is_day
         ),
-
         weather_code: firstAvailable(
           openMeteoWeather.current?.weather_code,
-          null
+          0
         ),
-
         condition_text: firstAvailable(
           weatherApiData.current?.condition?.text,
           null
         ),
-
         uv: firstAvailable(
           weatherApiData.current?.uv,
           openMeteoWeather.daily?.uv_index_max?.[0]
         ),
-
         air_quality_pm25: firstAvailable(
           openMeteoAir.hourly?.pm2_5?.[0],
           weatherApiData.current?.air_quality?.pm2_5
         )
       },
 
-      daily: openMeteoWeather.daily ?? null,
-      hourly: openMeteoWeather.hourly ?? null,
+      daily: {
+        time: openMeteoWeather.daily?.time || [],
+        weather_code: openMeteoWeather.daily?.weather_code || [],
+        temperature_2m_max: openMeteoWeather.daily?.temperature_2m_max || [],
+        temperature_2m_min: openMeteoWeather.daily?.temperature_2m_min || [],
+        precipitation_probability_max: openMeteoWeather.daily?.precipitation_probability_max || [],
+        sunrise: openMeteoWeather.daily?.sunrise || [],
+        sunset: openMeteoWeather.daily?.sunset || [],
+        uv_index_max: openMeteoWeather.daily?.uv_index_max || []
+      },
+
+      hourly: {
+        time: openMeteoWeather.hourly?.time || [],
+        temperature_2m: openMeteoWeather.hourly?.temperature_2m || [],
+        weather_code: openMeteoWeather.hourly?.weather_code || [],
+        is_day: openMeteoWeather.hourly?.is_day || [],
+        visibility: openMeteoWeather.hourly?.visibility || []
+      },
 
       source: {
         primary_weather: "Open-Meteo",
