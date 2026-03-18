@@ -7,6 +7,7 @@ const app = express();
 app.use(cors());
 
 const WEATHERAPI_KEY = process.env.WEATHERAPI_KEY;
+const OPENWEATHER_API_KEY = process.env.OPENWEATHER_API_KEY;
 
 const LOCATIONS = {
   moga: {
@@ -53,19 +54,26 @@ function mapWeatherApiConditionToCode(text) {
   return 0;
 }
 
+function mapOpenWeatherCodeToCode(id) {
+  if (id >= 200 && id < 300) return 95;
+  if (id >= 300 && id < 400) return 53;
+  if (id >= 500 && id < 600) return 63;
+  if (id >= 600 && id < 700) return 73;
+  if (id === 701 || id === 741) return 45;
+  if (id === 800) return 0;
+  if (id === 801 || id === 802) return 2;
+  if (id === 803 || id === 804) return 3;
+  return 0;
+}
+
 function convert12hTo24h(time12h) {
   if (!time12h) return "00:00:00";
 
   const [time, modifier] = time12h.split(" ");
   let [hours, minutes] = time.split(":");
 
-  if (hours === "12") {
-    hours = "00";
-  }
-
-  if (modifier === "PM") {
-    hours = String(parseInt(hours, 10) + 12);
-  }
+  if (hours === "12") hours = "00";
+  if (modifier === "PM") hours = String(parseInt(hours, 10) + 12);
 
   return `${hours.padStart(2, "0")}:${minutes}:00`;
 }
@@ -108,6 +116,36 @@ function buildHourlyFromWeatherApi(weatherApiData) {
       hourly.humidity.push(hour.humidity ?? null);
       hourly.wind_kph.push(hour.wind_kph ?? null);
     });
+  });
+
+  return hourly;
+}
+
+function buildHourlyFromOpenWeather(openWeatherData, timezoneOffsetSeconds = 0) {
+  const hourly = {
+    time: [],
+    temperature_2m: [],
+    weather_code: [],
+    is_day: [],
+    visibility: [],
+    humidity: [],
+    wind_kph: []
+  };
+
+  const list = openWeatherData.list || [];
+
+  list.forEach(item => {
+    const localTimestamp = (item.dt + timezoneOffsetSeconds) * 1000;
+    const date = new Date(localTimestamp);
+    const hour = date.getUTCHours();
+
+    hourly.time.push(date.toISOString().replace(".000Z", ""));
+    hourly.temperature_2m.push(item.main?.temp ?? null);
+    hourly.weather_code.push(mapOpenWeatherCodeToCode(item.weather?.[0]?.id));
+    hourly.is_day.push(hour >= 6 && hour < 18 ? 1 : 0);
+    hourly.visibility.push(item.visibility ?? null);
+    hourly.humidity.push(item.main?.humidity ?? null);
+    hourly.wind_kph.push(item.wind?.speed != null ? item.wind.speed * 3.6 : null);
   });
 
   return hourly;
@@ -162,10 +200,8 @@ app.get("/api/weather", async (req, res) => {
     const now = new Date();
     const year = now.getFullYear();
     const month = String(now.getMonth() + 1).padStart(2, "0");
-    const today = String(now.getDate()).padStart(2, "0");
-
-    const monthStart = `${year}-${month}-01`;
     const yesterday = `${year}-${month}-${String(Math.max(1, now.getDate() - 1)).padStart(2, "0")}`;
+    const monthStart = `${year}-${month}-01`;
 
     const openMeteoWeatherUrl =
       `https://api.open-meteo.com/v1/forecast?latitude=${location.lat}&longitude=${location.lon}&current=temperature_2m,wind_speed_10m,wind_direction_10m,weather_code,is_day,relative_humidity_2m,apparent_temperature,surface_pressure&hourly=temperature_2m,weather_code,is_day,visibility,relative_humidity_2m,wind_speed_10m&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset,uv_index_max&timezone=auto&forecast_days=7`;
@@ -179,25 +215,32 @@ app.get("/api/weather", async (req, res) => {
     const weatherApiUrl =
       `https://api.weatherapi.com/v1/forecast.json?key=${WEATHERAPI_KEY}&q=${location.lat},${location.lon}&days=7&aqi=yes&alerts=no`;
 
+    const openWeatherUrl =
+      `https://api.openweathermap.org/data/2.5/forecast?lat=${location.lat}&lon=${location.lon}&appid=${OPENWEATHER_API_KEY}&units=metric`;
+
     const [
       openMeteoWeatherResponse,
       openMeteoAirResponse,
       openMeteoHistoricalResponse,
-      weatherApiResponse
+      weatherApiResponse,
+      openWeatherResponse
     ] = await Promise.all([
       fetch(openMeteoWeatherUrl),
       fetch(openMeteoAirUrl),
       fetch(openMeteoHistoricalUrl),
-      fetch(weatherApiUrl)
+      fetch(weatherApiUrl),
+      fetch(openWeatherUrl)
     ]);
 
     const openMeteoWeather = await openMeteoWeatherResponse.json();
     const openMeteoAir = await openMeteoAirResponse.json();
     const openMeteoHistorical = await openMeteoHistoricalResponse.json();
     const weatherApiData = await weatherApiResponse.json();
+    const openWeatherData = await openWeatherResponse.json();
 
     const weatherApiDaily = buildDailyFromWeatherApi(weatherApiData);
     const weatherApiHourly = buildHourlyFromWeatherApi(weatherApiData);
+    const openWeatherHourly = buildHourlyFromOpenWeather(openWeatherData, openWeatherData.city?.timezone || 0);
 
     const openDaily = {
       time: openMeteoWeather.daily?.time || [],
@@ -221,15 +264,19 @@ app.get("/api/weather", async (req, res) => {
       uv_index_max: weatherApiDaily.uv_index_max.length ? weatherApiDaily.uv_index_max : openDaily.uv_index_max
     };
 
-    const mergedHourly = weatherApiHourly.time.length ? weatherApiHourly : {
-      time: openMeteoWeather.hourly?.time || [],
-      temperature_2m: openMeteoWeather.hourly?.temperature_2m || [],
-      weather_code: openMeteoWeather.hourly?.weather_code || [],
-      is_day: openMeteoWeather.hourly?.is_day || [],
-      visibility: openMeteoWeather.hourly?.visibility || [],
-      humidity: openMeteoWeather.hourly?.relative_humidity_2m || [],
-      wind_kph: openMeteoWeather.hourly?.wind_speed_10m || []
-    };
+    const mergedHourly = openWeatherHourly.time.length
+      ? openWeatherHourly
+      : weatherApiHourly.time.length
+      ? weatherApiHourly
+      : {
+          time: openMeteoWeather.hourly?.time || [],
+          temperature_2m: openMeteoWeather.hourly?.temperature_2m || [],
+          weather_code: openMeteoWeather.hourly?.weather_code || [],
+          is_day: openMeteoWeather.hourly?.is_day || [],
+          visibility: openMeteoWeather.hourly?.visibility || [],
+          humidity: openMeteoWeather.hourly?.relative_humidity_2m || [],
+          wind_kph: openMeteoWeather.hourly?.wind_speed_10m || []
+        };
 
     const monthly = mergeMonthlyData(openMeteoHistorical, mergedDaily);
 
@@ -333,7 +380,7 @@ app.get("/api/weather", async (req, res) => {
 
       source: {
         primary_current: "WeatherAPI",
-        primary_hourly: weatherApiHourly.time.length ? "WeatherAPI" : "Open-Meteo",
+        primary_hourly: openWeatherHourly.time.length ? "OpenWeather" : weatherApiHourly.time.length ? "WeatherAPI" : "Open-Meteo",
         primary_daily: "Open-Meteo with WeatherAPI fallback",
         monthly_history: "Open-Meteo Archive + Forecast Merge",
         air_quality: "Open-Meteo Air + WeatherAPI"
