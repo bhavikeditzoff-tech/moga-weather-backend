@@ -113,26 +113,6 @@ function buildHourlyFromWeatherApi(weatherApiData) {
   return hourly;
 }
 
-function findNearestHourlyIndex(hourlyTimes) {
-  if (!hourlyTimes || !hourlyTimes.length) return 0;
-
-  const now = new Date();
-  let nearestIndex = 0;
-  let nearestDiff = Infinity;
-
-  for (let i = 0; i < hourlyTimes.length; i++) {
-    const t = new Date(hourlyTimes[i]);
-    const diff = Math.abs(now.getTime() - t.getTime());
-
-    if (!isNaN(t.getTime()) && diff < nearestDiff) {
-      nearestDiff = diff;
-      nearestIndex = i;
-    }
-  }
-
-  return nearestIndex;
-}
-
 app.get("/", (req, res) => {
   res.send("Moga weather backend is running");
 });
@@ -161,36 +141,76 @@ app.get("/api/weather", async (req, res) => {
     const openMeteoAir = await openMeteoAirResponse.json();
     const weatherApiData = await weatherApiResponse.json();
 
-    const fallbackDaily = buildDailyFromWeatherApi(weatherApiData);
-    const fallbackHourly = buildHourlyFromWeatherApi(weatherApiData);
+    const weatherApiDaily = buildDailyFromWeatherApi(weatherApiData);
+    const weatherApiHourly = buildHourlyFromWeatherApi(weatherApiData);
 
-    const dailyData = openMeteoWeather.daily?.time?.length
-      ? {
-          time: openMeteoWeather.daily.time || [],
-          weather_code: openMeteoWeather.daily.weather_code || [],
-          temperature_2m_max: openMeteoWeather.daily.temperature_2m_max || [],
-          temperature_2m_min: openMeteoWeather.daily.temperature_2m_min || [],
-          precipitation_probability_max: openMeteoWeather.daily.precipitation_probability_max || [],
-          sunrise: openMeteoWeather.daily.sunrise || [],
-          sunset: openMeteoWeather.daily.sunset || [],
-          uv_index_max: openMeteoWeather.daily.uv_index_max || []
+    const openDaily = {
+      time: openMeteoWeather.daily?.time || [],
+      weather_code: openMeteoWeather.daily?.weather_code || [],
+      temperature_2m_max: openMeteoWeather.daily?.temperature_2m_max || [],
+      temperature_2m_min: openMeteoWeather.daily?.temperature_2m_min || [],
+      precipitation_probability_max: openMeteoWeather.daily?.precipitation_probability_max || [],
+      sunrise: openMeteoWeather.daily?.sunrise || [],
+      sunset: openMeteoWeather.daily?.sunset || [],
+      uv_index_max: openMeteoWeather.daily?.uv_index_max || []
+    };
+
+    const mergedDaily = {
+      time: openDaily.time.length ? openDaily.time : weatherApiDaily.time,
+      weather_code: openDaily.weather_code.length ? openDaily.weather_code : weatherApiDaily.weather_code,
+      temperature_2m_max: openDaily.temperature_2m_max.length ? openDaily.temperature_2m_max : weatherApiDaily.temperature_2m_max,
+      temperature_2m_min: openDaily.temperature_2m_min.length ? openDaily.temperature_2m_min : weatherApiDaily.temperature_2m_min,
+      precipitation_probability_max: openDaily.precipitation_probability_max.length ? openDaily.precipitation_probability_max : weatherApiDaily.precipitation_probability_max,
+      sunrise: openDaily.sunrise.length ? openDaily.sunrise : weatherApiDaily.sunrise,
+      sunset: openDaily.sunset.length ? openDaily.sunset : weatherApiDaily.sunset,
+      uv_index_max: weatherApiDaily.uv_index_max.length ? weatherApiDaily.uv_index_max : openDaily.uv_index_max
+    };
+
+    // Prefer WeatherAPI hourly for app-like display feel
+    const mergedHourly = weatherApiHourly.time.length ? weatherApiHourly : {
+      time: openMeteoWeather.hourly?.time || [],
+      temperature_2m: openMeteoWeather.hourly?.temperature_2m || [],
+      weather_code: openMeteoWeather.hourly?.weather_code || [],
+      is_day: openMeteoWeather.hourly?.is_day || [],
+      visibility: openMeteoWeather.hourly?.visibility || [],
+      humidity: openMeteoWeather.hourly?.relative_humidity_2m || [],
+      wind_kph: openMeteoWeather.hourly?.wind_speed_10m || []
+    };
+
+    const nearestHourlyIndex = (() => {
+      if (!mergedHourly.time.length) return 0;
+      const now = new Date();
+      let idx = 0;
+      let best = Infinity;
+
+      for (let i = 0; i < mergedHourly.time.length; i++) {
+        const t = new Date(mergedHourly.time[i]);
+        const diff = Math.abs(now.getTime() - t.getTime());
+        if (!isNaN(t.getTime()) && diff < best) {
+          best = diff;
+          idx = i;
         }
-      : fallbackDaily;
+      }
+      return idx;
+    })();
 
-    const hourlyData = openMeteoWeather.hourly?.time?.length
-      ? {
-          time: openMeteoWeather.hourly.time || [],
-          temperature_2m: openMeteoWeather.hourly.temperature_2m || [],
-          weather_code: openMeteoWeather.hourly.weather_code || [],
-          is_day: openMeteoWeather.hourly.is_day || [],
-          visibility: openMeteoWeather.hourly.visibility || [],
-          humidity: openMeteoWeather.hourly.relative_humidity_2m || [],
-          wind_kph: openMeteoWeather.hourly.wind_speed_10m || []
+    const nearestAirIndex = (() => {
+      const arr = openMeteoAir.hourly?.time || [];
+      if (!arr.length) return 0;
+      const now = new Date();
+      let idx = 0;
+      let best = Infinity;
+
+      for (let i = 0; i < arr.length; i++) {
+        const t = new Date(arr[i]);
+        const diff = Math.abs(now.getTime() - t.getTime());
+        if (!isNaN(t.getTime()) && diff < best) {
+          best = diff;
+          idx = i;
         }
-      : fallbackHourly;
-
-    const nearestHourlyIndex = findNearestHourlyIndex(hourlyData.time);
-    const nearestAirIndex = findNearestHourlyIndex(openMeteoAir.hourly?.time || []);
+      }
+      return idx;
+    })();
 
     const mergedData = {
       location: {
@@ -203,35 +223,36 @@ app.get("/api/weather", async (req, res) => {
       },
 
       current: {
+        // Prefer WeatherAPI for current
         temperature_c: firstAvailable(
-          openMeteoWeather.current?.temperature_2m,
-          weatherApiData.current?.temp_c
+          weatherApiData.current?.temp_c,
+          openMeteoWeather.current?.temperature_2m
         ),
         feelslike_c: firstAvailable(
-          openMeteoWeather.current?.apparent_temperature,
-          weatherApiData.current?.feelslike_c
+          weatherApiData.current?.feelslike_c,
+          openMeteoWeather.current?.apparent_temperature
         ),
         humidity: firstAvailable(
+          weatherApiData.current?.humidity,
           openMeteoWeather.current?.relative_humidity_2m,
-          hourlyData.humidity?.[nearestHourlyIndex],
-          weatherApiData.current?.humidity
+          mergedHourly.humidity?.[nearestHourlyIndex]
         ),
         wind_kph: firstAvailable(
+          weatherApiData.current?.wind_kph,
           openMeteoWeather.current?.wind_speed_10m,
-          hourlyData.wind_kph?.[nearestHourlyIndex],
-          weatherApiData.current?.wind_kph
+          mergedHourly.wind_kph?.[nearestHourlyIndex]
         ),
         wind_degree: firstAvailable(
-          openMeteoWeather.current?.wind_direction_10m,
-          weatherApiData.current?.wind_degree
+          weatherApiData.current?.wind_degree,
+          openMeteoWeather.current?.wind_direction_10m
         ),
         pressure_hpa: firstAvailable(
-          openMeteoWeather.current?.surface_pressure,
-          weatherApiData.current?.pressure_mb
+          weatherApiData.current?.pressure_mb,
+          openMeteoWeather.current?.surface_pressure
         ),
         is_day: firstAvailable(
-          openMeteoWeather.current?.is_day,
-          weatherApiData.current?.is_day
+          weatherApiData.current?.is_day,
+          openMeteoWeather.current?.is_day
         ),
         weather_code: firstAvailable(
           openMeteoWeather.current?.weather_code,
@@ -243,7 +264,7 @@ app.get("/api/weather", async (req, res) => {
         ),
         uv: firstAvailable(
           weatherApiData.current?.uv,
-          dailyData.uv_index_max?.[0]
+          mergedDaily.uv_index_max?.[0]
         ),
         air_quality_pm25: firstAvailable(
           openMeteoAir.hourly?.pm2_5?.[nearestAirIndex],
@@ -251,19 +272,21 @@ app.get("/api/weather", async (req, res) => {
         )
       },
 
-      daily: dailyData,
-      hourly: hourlyData,
+      daily: mergedDaily,
+      hourly: mergedHourly,
 
       debug: {
-        usingWeatherApiDailyFallback: !openMeteoWeather.daily?.time?.length,
-        usingWeatherApiHourlyFallback: !openMeteoWeather.hourly?.time?.length,
         nearestHourlyIndex,
-        nearestAirIndex
+        nearestAirIndex,
+        hourlySource: weatherApiHourly.time.length ? "WeatherAPI" : "Open-Meteo",
+        currentSourceBias: "WeatherAPI",
+        dailySourceBias: "Open-Meteo + WeatherAPI"
       },
 
       source: {
-        primary_weather: "Open-Meteo",
-        fallback_weather: "WeatherAPI",
+        primary_current: "WeatherAPI",
+        primary_hourly: weatherApiHourly.time.length ? "WeatherAPI" : "Open-Meteo",
+        primary_daily: "Open-Meteo with WeatherAPI fallback",
         air_quality: "Open-Meteo Air + WeatherAPI"
       }
     };
