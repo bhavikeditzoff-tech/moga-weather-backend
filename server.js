@@ -151,6 +151,31 @@ function buildHourlyFromOpenWeather(openWeatherData, timezoneOffsetSeconds = 0) 
   return hourly;
 }
 
+function buildDailyFromOpenWeatherHourly(openWeatherHourly) {
+  const grouped = {};
+
+  for (let i = 0; i < openWeatherHourly.time.length; i++) {
+    const dateStr = openWeatherHourly.time[i].split("T")[0];
+    if (!grouped[dateStr]) {
+      grouped[dateStr] = {
+        temps: [],
+        codes: []
+      };
+    }
+    grouped[dateStr].temps.push(openWeatherHourly.temperature_2m[i]);
+    grouped[dateStr].codes.push(openWeatherHourly.weather_code[i]);
+  }
+
+  const dates = Object.keys(grouped).sort();
+
+  return {
+    time: dates,
+    temperature_2m_max: dates.map(d => Math.max(...grouped[d].temps.filter(v => v !== null))),
+    temperature_2m_min: dates.map(d => Math.min(...grouped[d].temps.filter(v => v !== null))),
+    weather_code: dates.map(d => grouped[d].codes[0] ?? 0)
+  };
+}
+
 function mergeMonthlyData(historical, forecast) {
   const map = {};
 
@@ -237,11 +262,11 @@ app.get("/api/weather", async (req, res) => {
     const openMeteoHistorical = await openMeteoHistoricalResponse.json();
     const weatherApiData = await weatherApiResponse.json();
     const openWeatherData = await openWeatherResponse.json();
-    console.log("OPENWEATHER DATA:", JSON.stringify(openWeatherData, null, 2));
 
     const weatherApiDaily = buildDailyFromWeatherApi(weatherApiData);
     const weatherApiHourly = buildHourlyFromWeatherApi(weatherApiData);
     const openWeatherHourly = buildHourlyFromOpenWeather(openWeatherData, openWeatherData.city?.timezone || 0);
+    const openWeatherDaily = buildDailyFromOpenWeatherHourly(openWeatherHourly);
 
     const openDaily = {
       time: openMeteoWeather.daily?.time || [],
@@ -257,8 +282,8 @@ app.get("/api/weather", async (req, res) => {
     const mergedDaily = {
       time: openDaily.time.length ? openDaily.time : weatherApiDaily.time,
       weather_code: openDaily.weather_code.length ? openDaily.weather_code : weatherApiDaily.weather_code,
-      temperature_2m_max: openDaily.temperature_2m_max.length ? openDaily.temperature_2m_max : weatherApiDaily.temperature_2m_max,
-      temperature_2m_min: openDaily.temperature_2m_min.length ? openDaily.temperature_2m_min : weatherApiDaily.temperature_2m_min,
+      temperature_2m_max: openWeatherDaily.temperature_2m_max?.length ? openWeatherDaily.temperature_2m_max : (openDaily.temperature_2m_max.length ? openDaily.temperature_2m_max : weatherApiDaily.temperature_2m_max),
+      temperature_2m_min: openWeatherDaily.temperature_2m_min?.length ? openWeatherDaily.temperature_2m_min : (openDaily.temperature_2m_min.length ? openDaily.temperature_2m_min : weatherApiDaily.temperature_2m_min),
       precipitation_probability_max: openDaily.precipitation_probability_max.length ? openDaily.precipitation_probability_max : weatherApiDaily.precipitation_probability_max,
       sunrise: openDaily.sunrise.length ? openDaily.sunrise : weatherApiDaily.sunrise,
       sunset: openDaily.sunset.length ? openDaily.sunset : weatherApiDaily.sunset,
@@ -328,6 +353,7 @@ app.get("/api/weather", async (req, res) => {
 
       current: {
         temperature_c: firstAvailable(
+          openWeatherData.list?.[0]?.main?.temp,
           weatherApiData.current?.temp_c,
           openMeteoWeather.current?.temperature_2m
         ),
@@ -380,9 +406,9 @@ app.get("/api/weather", async (req, res) => {
       monthly,
 
       source: {
-        primary_current: "WeatherAPI",
+        primary_current: "OpenWeather + WeatherAPI",
         primary_hourly: openWeatherHourly.time.length ? "OpenWeather" : weatherApiHourly.time.length ? "WeatherAPI" : "Open-Meteo",
-        primary_daily: "Open-Meteo with WeatherAPI fallback",
+        primary_daily_temp: openWeatherDaily.temperature_2m_max?.length ? "OpenWeather 5-day derived" : "Open-Meteo / WeatherAPI",
         monthly_history: "Open-Meteo Archive + Forecast Merge",
         air_quality: "Open-Meteo Air + WeatherAPI"
       }
