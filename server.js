@@ -108,7 +108,7 @@ function buildHourlyFromWeatherApi(weatherApiData) {
   forecastDays.forEach(day => {
     const hours = day.hour || [];
     hours.forEach(hour => {
-      hourly.time.push(hour.time);
+      hourly.time.push(hour.time.replace(" ", "T"));
       hourly.temperature_2m.push(hour.temp_c);
       hourly.weather_code.push(mapWeatherApiConditionToCode(hour.condition?.text));
       hourly.is_day.push(hour.is_day);
@@ -121,7 +121,7 @@ function buildHourlyFromWeatherApi(weatherApiData) {
   return hourly;
 }
 
-function buildHourlyFromOpenWeather(openWeatherData, timezoneOffsetSeconds = 0) {
+function buildHourlyFromOpenWeather(openWeatherData) {
   const hourly = {
     time: [],
     temperature_2m: [],
@@ -135,11 +135,12 @@ function buildHourlyFromOpenWeather(openWeatherData, timezoneOffsetSeconds = 0) 
   const list = openWeatherData.list || [];
 
   list.forEach(item => {
-    const localTimestamp = (item.dt + timezoneOffsetSeconds) * 1000;
-    const date = new Date(localTimestamp);
-    const hour = date.getUTCHours();
+    const dtText = item.dt_txt ? item.dt_txt.replace(" ", "T") : null;
+    if (!dtText) return;
 
-    hourly.time.push(date.toISOString().replace(".000Z", ""));
+    const hour = Number(dtText.split("T")[1]?.split(":")[0] ?? 12);
+
+    hourly.time.push(dtText);
     hourly.temperature_2m.push(item.main?.temp ?? null);
     hourly.weather_code.push(mapOpenWeatherCodeToCode(item.weather?.[0]?.id));
     hourly.is_day.push(hour >= 6 && hour < 18 ? 1 : 0);
@@ -162,7 +163,11 @@ function buildDailyFromOpenWeatherHourly(openWeatherHourly) {
         codes: []
       };
     }
-    grouped[dateStr].temps.push(openWeatherHourly.temperature_2m[i]);
+
+    if (openWeatherHourly.temperature_2m[i] !== null && openWeatherHourly.temperature_2m[i] !== undefined) {
+      grouped[dateStr].temps.push(openWeatherHourly.temperature_2m[i]);
+    }
+
     grouped[dateStr].codes.push(openWeatherHourly.weather_code[i]);
   }
 
@@ -170,8 +175,8 @@ function buildDailyFromOpenWeatherHourly(openWeatherHourly) {
 
   return {
     time: dates,
-    temperature_2m_max: dates.map(d => Math.max(...grouped[d].temps.filter(v => v !== null))),
-    temperature_2m_min: dates.map(d => Math.min(...grouped[d].temps.filter(v => v !== null))),
+    temperature_2m_max: dates.map(d => grouped[d].temps.length ? Math.max(...grouped[d].temps) : null),
+    temperature_2m_min: dates.map(d => grouped[d].temps.length ? Math.min(...grouped[d].temps) : null),
     weather_code: dates.map(d => grouped[d].codes[0] ?? 0)
   };
 }
@@ -265,7 +270,7 @@ app.get("/api/weather", async (req, res) => {
 
     const weatherApiDaily = buildDailyFromWeatherApi(weatherApiData);
     const weatherApiHourly = buildHourlyFromWeatherApi(weatherApiData);
-    const openWeatherHourly = buildHourlyFromOpenWeather(openWeatherData, openWeatherData.city?.timezone || 0);
+    const openWeatherHourly = buildHourlyFromOpenWeather(openWeatherData);
     const openWeatherDaily = buildDailyFromOpenWeatherHourly(openWeatherHourly);
 
     const openDaily = {
@@ -353,7 +358,7 @@ app.get("/api/weather", async (req, res) => {
 
       current: {
         temperature_c: firstAvailable(
-          openWeatherData.list?.[0]?.main?.temp,
+          openWeatherHourly.temperature_2m?.[0],
           weatherApiData.current?.temp_c,
           openMeteoWeather.current?.temperature_2m
         ),
