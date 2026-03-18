@@ -237,6 +237,7 @@ app.get("/api/weather", async (req, res) => {
     const openMeteoHistorical = await openMeteoHistoricalResponse.json();
     const weatherApiData = await weatherApiResponse.json();
     const openWeatherData = await openWeatherResponse.json();
+    console.log("OPENWEATHER DATA:", JSON.stringify(openWeatherData, null, 2));
 
     const weatherApiDaily = buildDailyFromWeatherApi(weatherApiData);
     const weatherApiHourly = buildHourlyFromWeatherApi(weatherApiData);
