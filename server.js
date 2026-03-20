@@ -214,8 +214,20 @@ function mergeDaily(openMeteoDaily, weatherApiDaily, tomorrowDaily) {
         0
       )
     ),
-    temperature_2m_max: openMeteoDaily.temperature_2m_max || [],
-    temperature_2m_min: openMeteoDaily.temperature_2m_min || [],
+    temperature_2m_max: times.map((_, i) =>
+      firstAvailable(
+        openMeteoDaily.temperature_2m_max?.[i],
+        weatherApiDaily.temperature_2m_max?.[i],
+        null
+      )
+    ),
+    temperature_2m_min: times.map((_, i) =>
+      firstAvailable(
+        openMeteoDaily.temperature_2m_min?.[i],
+        weatherApiDaily.temperature_2m_min?.[i],
+        null
+      )
+    ),
     precipitation_probability_max: times.map((_, i) =>
       firstAvailable(
         openMeteoDaily.precipitation_probability_max?.[i],
