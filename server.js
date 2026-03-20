@@ -93,34 +93,6 @@ function buildDailyFromWeatherApi(weatherApiData) {
   };
 }
 
-function buildHourlyFromWeatherApi(weatherApiData) {
-  const forecastDays = weatherApiData.forecast?.forecastday || [];
-  const hourly = {
-    time: [],
-    temperature_2m: [],
-    weather_code: [],
-    is_day: [],
-    visibility: [],
-    humidity: [],
-    wind_kph: []
-  };
-
-  forecastDays.forEach(day => {
-    const hours = day.hour || [];
-    hours.forEach(hour => {
-      hourly.time.push(hour.time.replace(" ", "T"));
-      hourly.temperature_2m.push(hour.temp_c);
-      hourly.weather_code.push(mapWeatherApiConditionToCode(hour.condition?.text));
-      hourly.is_day.push(hour.is_day);
-      hourly.visibility.push((hour.vis_km ?? 0) * 1000);
-      hourly.humidity.push(hour.humidity ?? null);
-      hourly.wind_kph.push(hour.wind_kph ?? null);
-    });
-  });
-
-  return hourly;
-}
-
 function buildHourlyFromOpenWeather(openWeatherData) {
   const hourly = {
     time: [],
@@ -234,7 +206,7 @@ app.get("/api/weather", async (req, res) => {
     const monthStart = `${year}-${month}-01`;
 
     const openMeteoWeatherUrl =
-      `https://api.open-meteo.com/v1/forecast?latitude=${location.lat}&longitude=${location.lon}&current=temperature_2m,wind_speed_10m,wind_direction_10m,weather_code,is_day,relative_humidity_2m,apparent_temperature,surface_pressure&hourly=temperature_2m,weather_code,is_day,visibility,relative_humidity_2m,wind_speed_10m&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset,uv_index_max&timezone=auto&forecast_days=7`;
+      `https://api.open-meteo.com/v1/forecast?latitude=${location.lat}&longitude=${location.lon}&current=temperature_2m,wind_speed_10m,wind_direction_10m,weather_code,is_day,relative_humidity_2m,apparent_temperature,surface_pressure&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset,uv_index_max&timezone=auto&forecast_days=7`;
 
     const openMeteoAirUrl =
       `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${location.lat}&longitude=${location.lon}&hourly=pm2_5&timezone=auto`;
@@ -245,32 +217,37 @@ app.get("/api/weather", async (req, res) => {
     const weatherApiUrl =
       `https://api.weatherapi.com/v1/forecast.json?key=${WEATHERAPI_KEY}&q=${location.lat},${location.lon}&days=7&aqi=yes&alerts=no`;
 
-    const openWeatherUrl =
+    const openWeatherForecastUrl =
       `https://api.openweathermap.org/data/2.5/forecast?lat=${location.lat}&lon=${location.lon}&appid=${OPENWEATHER_API_KEY}&units=metric`;
+
+    const openWeatherCurrentUrl =
+      `https://api.openweathermap.org/data/2.5/weather?lat=${location.lat}&lon=${location.lon}&appid=${OPENWEATHER_API_KEY}&units=metric`;
 
     const [
       openMeteoWeatherResponse,
       openMeteoAirResponse,
       openMeteoHistoricalResponse,
       weatherApiResponse,
-      openWeatherResponse
+      openWeatherForecastResponse,
+      openWeatherCurrentResponse
     ] = await Promise.all([
       fetch(openMeteoWeatherUrl),
       fetch(openMeteoAirUrl),
       fetch(openMeteoHistoricalUrl),
       fetch(weatherApiUrl),
-      fetch(openWeatherUrl)
+      fetch(openWeatherForecastUrl),
+      fetch(openWeatherCurrentUrl)
     ]);
 
     const openMeteoWeather = await openMeteoWeatherResponse.json();
     const openMeteoAir = await openMeteoAirResponse.json();
     const openMeteoHistorical = await openMeteoHistoricalResponse.json();
     const weatherApiData = await weatherApiResponse.json();
-    const openWeatherData = await openWeatherResponse.json();
+    const openWeatherForecast = await openWeatherForecastResponse.json();
+    const openWeatherCurrent = await openWeatherCurrentResponse.json();
 
     const weatherApiDaily = buildDailyFromWeatherApi(weatherApiData);
-    const weatherApiHourly = buildHourlyFromWeatherApi(weatherApiData);
-    const openWeatherHourly = buildHourlyFromOpenWeather(openWeatherData);
+    const openWeatherHourly = buildHourlyFromOpenWeather(openWeatherForecast);
     const openWeatherDaily = buildDailyFromOpenWeatherHourly(openWeatherHourly);
 
     const openDaily = {
@@ -295,38 +272,7 @@ app.get("/api/weather", async (req, res) => {
       uv_index_max: weatherApiDaily.uv_index_max.length ? weatherApiDaily.uv_index_max : openDaily.uv_index_max
     };
 
-    const mergedHourly = openWeatherHourly.time.length
-      ? openWeatherHourly
-      : weatherApiHourly.time.length
-      ? weatherApiHourly
-      : {
-          time: openMeteoWeather.hourly?.time || [],
-          temperature_2m: openMeteoWeather.hourly?.temperature_2m || [],
-          weather_code: openMeteoWeather.hourly?.weather_code || [],
-          is_day: openMeteoWeather.hourly?.is_day || [],
-          visibility: openMeteoWeather.hourly?.visibility || [],
-          humidity: openMeteoWeather.hourly?.relative_humidity_2m || [],
-          wind_kph: openMeteoWeather.hourly?.wind_speed_10m || []
-        };
-
     const monthly = mergeMonthlyData(openMeteoHistorical, mergedDaily);
-
-    const nearestHourlyIndex = (() => {
-      if (!mergedHourly.time.length) return 0;
-      const now = new Date();
-      let idx = 0;
-      let best = Infinity;
-
-      for (let i = 0; i < mergedHourly.time.length; i++) {
-        const t = new Date(mergedHourly.time[i]);
-        const diff = Math.abs(now.getTime() - t.getTime());
-        if (!isNaN(t.getTime()) && diff < best) {
-          best = diff;
-          idx = i;
-        }
-      }
-      return idx;
-    })();
 
     const nearestAirIndex = (() => {
       const arr = openMeteoAir.hourly?.time || [];
@@ -358,29 +304,32 @@ app.get("/api/weather", async (req, res) => {
 
       current: {
         temperature_c: firstAvailable(
-          openWeatherHourly.temperature_2m?.[0],
+          openWeatherCurrent.main?.temp,
           weatherApiData.current?.temp_c,
           openMeteoWeather.current?.temperature_2m
         ),
         feelslike_c: firstAvailable(
+          openWeatherCurrent.main?.feels_like,
           weatherApiData.current?.feelslike_c,
           openMeteoWeather.current?.apparent_temperature
         ),
         humidity: firstAvailable(
+          openWeatherCurrent.main?.humidity,
           weatherApiData.current?.humidity,
-          openMeteoWeather.current?.relative_humidity_2m,
-          mergedHourly.humidity?.[nearestHourlyIndex]
+          openMeteoWeather.current?.relative_humidity_2m
         ),
         wind_kph: firstAvailable(
+          openWeatherCurrent.wind?.speed != null ? openWeatherCurrent.wind.speed * 3.6 : null,
           weatherApiData.current?.wind_kph,
-          openMeteoWeather.current?.wind_speed_10m,
-          mergedHourly.wind_kph?.[nearestHourlyIndex]
+          openMeteoWeather.current?.wind_speed_10m
         ),
         wind_degree: firstAvailable(
+          openWeatherCurrent.wind?.deg,
           weatherApiData.current?.wind_degree,
           openMeteoWeather.current?.wind_direction_10m
         ),
         pressure_hpa: firstAvailable(
+          openWeatherCurrent.main?.pressure,
           weatherApiData.current?.pressure_mb,
           openMeteoWeather.current?.surface_pressure
         ),
@@ -389,11 +338,13 @@ app.get("/api/weather", async (req, res) => {
           openMeteoWeather.current?.is_day
         ),
         weather_code: firstAvailable(
+          mapOpenWeatherCodeToCode(openWeatherCurrent.weather?.[0]?.id),
           openMeteoWeather.current?.weather_code,
           mapWeatherApiConditionToCode(weatherApiData.current?.condition?.text)
         ),
         condition_text: firstAvailable(
           weatherApiData.current?.condition?.text,
+          openWeatherCurrent.weather?.[0]?.main,
           null
         ),
         uv: firstAvailable(
@@ -407,12 +358,12 @@ app.get("/api/weather", async (req, res) => {
       },
 
       daily: mergedDaily,
-      hourly: mergedHourly,
+      hourly: openWeatherHourly,
       monthly,
 
       source: {
-        primary_current: "OpenWeather + WeatherAPI",
-        primary_hourly: openWeatherHourly.time.length ? "OpenWeather" : weatherApiHourly.time.length ? "WeatherAPI" : "Open-Meteo",
+        primary_current: "OpenWeather",
+        primary_hourly: "OpenWeather",
         primary_daily_temp: openWeatherDaily.temperature_2m_max?.length ? "OpenWeather 5-day derived" : "Open-Meteo / WeatherAPI",
         monthly_history: "Open-Meteo Archive + Forecast Merge",
         air_quality: "Open-Meteo Air + WeatherAPI"
