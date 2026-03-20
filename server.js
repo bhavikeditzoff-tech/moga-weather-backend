@@ -204,8 +204,12 @@ function mergeDaily(openMeteoDaily, weatherApiDaily, tomorrowDaily) {
   return {
     time: times,
     weather_code: times.map((_, i) =>
-      firstAvailable(openMeteoDaily.weather_code?.[i], tomorrowDaily.weather_code?.[i], 0)
-    ),
+  firstAvailable(
+    tomorrowDaily.weather_code?.[i],
+    openMeteoDaily.weather_code?.[i],
+    0
+  )
+),
     temperature_2m_max: openMeteoDaily.temperature_2m_max?.length ? openMeteoDaily.temperature_2m_max : weatherApiDaily.temperature_2m_max,
     temperature_2m_min: openMeteoDaily.temperature_2m_min?.length ? openMeteoDaily.temperature_2m_min : weatherApiDaily.temperature_2m_min,
     precipitation_probability_max: times.map((_, i) =>
