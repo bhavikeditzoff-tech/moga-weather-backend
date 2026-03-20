@@ -138,28 +138,28 @@ function buildHourlyFromOpenWeather(openWeatherData) {
   return hourly;
 }
 
-function buildDailyFromTomorrow(tomorrowDaily, weatherApiData) {
-  const weatherApiDays = weatherApiData.forecast?.forecastday || [];
+function buildDailyFromTomorrow(dailyTimelines, weatherApiData) {
+  const forecastDays = weatherApiData.forecast?.forecastday || [];
 
   const sunriseMap = {};
   const sunsetMap = {};
   const uvMap = {};
 
-  weatherApiDays.forEach(day => {
+  forecastDays.forEach(day => {
     sunriseMap[day.date] = `${day.date}T${convert12hTo24h(day.astro?.sunrise)}`;
     sunsetMap[day.date] = `${day.date}T${convert12hTo24h(day.astro?.sunset)}`;
     uvMap[day.date] = day.day?.uv ?? 0;
   });
 
   return {
-    time: tomorrowDaily.map(day => day.time.split("T")[0]),
-    weather_code: tomorrowDaily.map(day => mapTomorrowCodeToWeatherCode(day.values?.weatherCodeMax ?? day.values?.weatherCodeMin ?? 1000)),
-    temperature_2m_max: tomorrowDaily.map(day => day.values?.temperatureMax ?? null),
-    temperature_2m_min: tomorrowDaily.map(day => day.values?.temperatureMin ?? null),
-    precipitation_probability_max: tomorrowDaily.map(day => day.values?.precipitationProbabilityMax ?? 0),
-    sunrise: tomorrowDaily.map(day => sunriseMap[day.time.split("T")[0]] ?? null),
-    sunset: tomorrowDaily.map(day => sunsetMap[day.time.split("T")[0]] ?? null),
-    uv_index_max: tomorrowDaily.map(day => uvMap[day.time.split("T")[0]] ?? day.values?.uvIndexMax ?? 0)
+    time: dailyTimelines.map(day => day.time.split("T")[0]),
+    weather_code: dailyTimelines.map(day => mapTomorrowCodeToWeatherCode(day.values?.weatherCodeMax ?? day.values?.weatherCodeMin ?? 1000)),
+    temperature_2m_max: dailyTimelines.map(day => day.values?.temperatureMax ?? null),
+    temperature_2m_min: dailyTimelines.map(day => day.values?.temperatureMin ?? null),
+    precipitation_probability_max: dailyTimelines.map(day => day.values?.precipitationProbabilityMax ?? 0),
+    sunrise: dailyTimelines.map(day => sunriseMap[day.time.split("T")[0]] ?? null),
+    sunset: dailyTimelines.map(day => sunsetMap[day.time.split("T")[0]] ?? null),
+    uv_index_max: dailyTimelines.map(day => uvMap[day.time.split("T")[0]] ?? day.values?.uvIndexMax ?? 0)
   };
 }
 
@@ -261,23 +261,6 @@ app.get("/api/weather", async (req, res) => {
     const mergedHourly = buildHourlyFromOpenWeather(openWeatherForecast);
     const monthly = mergeMonthlyData(openMeteoHistorical, mergedDaily);
 
-    const nearestHourlyIndex = (() => {
-      if (!mergedHourly.time.length) return 0;
-      const now = new Date();
-      let idx = 0;
-      let best = Infinity;
-
-      for (let i = 0; i < mergedHourly.time.length; i++) {
-        const t = new Date(mergedHourly.time[i]);
-        const diff = Math.abs(now.getTime() - t.getTime());
-        if (!isNaN(t.getTime()) && diff < best) {
-          best = diff;
-          idx = i;
-        }
-      }
-      return idx;
-    })();
-
     const nearestAirIndex = (() => {
       const arr = openMeteoAir.hourly?.time || [];
       if (!arr.length) return 0;
@@ -323,6 +306,11 @@ app.get("/api/weather", async (req, res) => {
       daily: mergedDaily,
       hourly: mergedHourly,
       monthly,
+
+      debug: {
+        tomorrowDailyCount: tomorrowDaily.length,
+        openWeatherHourlyCount: mergedHourly.time.length
+      },
 
       source: {
         primary_current: "OpenWeather",
