@@ -253,6 +253,8 @@ app.get("/api/weather", async (req, res) => {
     const weatherApiData = await weatherApiResponse.json();
     const openWeatherForecast = await openWeatherForecastResponse.json();
     const openWeatherCurrent = await openWeatherCurrentResponse.json();
+console.log("TOMORROW RAW:", JSON.stringify(tomorrowData, null, 2));
+console.log("OPENWEATHER FORECAST RAW:", JSON.stringify(openWeatherForecast, null, 2));
     const openMeteoAir = await openMeteoAirResponse.json();
     const openMeteoHistorical = await openMeteoHistoricalResponse.json();
 
