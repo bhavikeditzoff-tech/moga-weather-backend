@@ -196,21 +196,13 @@ function buildDailyFromOpenMeteo(openMeteoWeather) {
     uv_index_max: openMeteoWeather.daily?.uv_index_max || []
   };
 }
-function weightedAverage(weightedValues) {
-  const valid = weightedValues.filter(item => item.value !== undefined && item.value !== null && !isNaN(item.value));
-  if (!valid.length) return null;
 
-  const totalWeight = valid.reduce((sum, item) => sum + item.weight, 0);
-  const weightedSum = valid.reduce((sum, item) => sum + item.value * item.weight, 0);
-
-  return weightedSum / totalWeight;
-}
 function mergeDaily(openMeteoDaily, weatherApiDaily, tomorrowDaily) {
-  const times = tomorrowDaily.time?.length
-    ? tomorrowDaily.time
-    : openMeteoDaily.time?.length
+  const times = openMeteoDaily.time?.length
     ? openMeteoDaily.time
-    : weatherApiDaily.time || [];
+    : weatherApiDaily.time?.length
+    ? weatherApiDaily.time
+    : tomorrowDaily.time || [];
 
   return {
     time: times,
@@ -222,18 +214,20 @@ function mergeDaily(openMeteoDaily, weatherApiDaily, tomorrowDaily) {
         0
       )
     ),
-   temperature_2m_max: times.map((_, i) =>
-  weightedAverage([
-    { value: weatherApiDaily.temperature_2m_max?.[i], weight: 0.7 },
-    { value: tomorrowDaily.temperature_2m_max?.[i], weight: 0.3 }
-  ])
-),
-temperature_2m_min: times.map((_, i) =>
-  weightedAverage([
-    { value: weatherApiDaily.temperature_2m_min?.[i], weight: 0.7 },
-    { value: tomorrowDaily.temperature_2m_min?.[i], weight: 0.3 }
-  ])
-),
+    temperature_2m_max: times.map((_, i) =>
+      firstAvailable(
+        openMeteoDaily.temperature_2m_max?.[i],
+        weatherApiDaily.temperature_2m_max?.[i],
+        null
+      )
+    ),
+    temperature_2m_min: times.map((_, i) =>
+      firstAvailable(
+        openMeteoDaily.temperature_2m_min?.[i],
+        weatherApiDaily.temperature_2m_min?.[i],
+        null
+      )
+    ),
     precipitation_probability_max: times.map((_, i) =>
       firstAvailable(
         openMeteoDaily.precipitation_probability_max?.[i],
