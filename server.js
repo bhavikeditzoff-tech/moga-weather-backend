@@ -45,6 +45,18 @@ function weightedAverage(weightedValues) {
   return weightedSum / totalWeight;
 }
 
+function convert12hTo24h(time12h) {
+  if (!time12h) return "00:00:00";
+
+  const [time, modifier] = time12h.split(" ");
+  let [hours, minutes] = time.split(":");
+
+  if (hours === "12") hours = "00";
+  if (modifier === "PM") hours = String(parseInt(hours, 10) + 12);
+
+  return `${hours.padStart(2, "0")}:${minutes}:00`;
+}
+
 function mapWeatherApiConditionToCode(text) {
   const lower = (text || "").toLowerCase();
 
@@ -164,38 +176,30 @@ function blendHourlySeries(primary, secondary, tertiary) {
       ])
     ),
     weather_code: times.map((_, i) =>
-      firstAvailable(
-        primary.weather_code?.[i],
-        secondary.weather_code?.[i],
-        tertiary.weather_code?.[i]
-      )
+      firstAvailable(primary.weather_code?.[i], secondary.weather_code?.[i], tertiary.weather_code?.[i])
     ),
     is_day: times.map((_, i) =>
-      firstAvailable(
-        primary.is_day?.[i],
-        secondary.is_day?.[i],
-        tertiary.is_day?.[i]
-      )
+      firstAvailable(primary.is_day?.[i], secondary.is_day?.[i], tertiary.is_day?.[i])
     ),
     visibility: times.map((_, i) =>
       weightedAverage([
         { value: primary.visibility?.[i], weight: 0.45 },
         { value: secondary.visibility?.[i], weight: 0.35 },
-        { value: tertiary.visibility?.[i], weight: 0.20 }
+        { value: tertiary.visibility?.[i], weight: 0.2 }
       ])
     ),
     humidity: times.map((_, i) =>
       weightedAverage([
         { value: primary.humidity?.[i], weight: 0.45 },
         { value: secondary.humidity?.[i], weight: 0.35 },
-        { value: tertiary.humidity?.[i], weight: 0.20 }
+        { value: tertiary.humidity?.[i], weight: 0.2 }
       ])
     ),
     wind_kph: times.map((_, i) =>
       weightedAverage([
         { value: primary.wind_kph?.[i], weight: 0.45 },
         { value: secondary.wind_kph?.[i], weight: 0.35 },
-        { value: tertiary.wind_kph?.[i], weight: 0.20 }
+        { value: tertiary.wind_kph?.[i], weight: 0.2 }
       ])
     )
   };
@@ -252,11 +256,7 @@ function blendDailySeries(tomorrowDaily, weatherApiDaily, openMeteoDaily) {
   return {
     time: times,
     weather_code: times.map((_, i) =>
-      firstAvailable(
-        tomorrowDaily.weather_code?.[i],
-        weatherApiDaily.weather_code?.[i],
-        openMeteoDaily.weather_code?.[i]
-      )
+      firstAvailable(tomorrowDaily.weather_code?.[i], weatherApiDaily.weather_code?.[i], openMeteoDaily.weather_code?.[i])
     ),
     temperature_2m_max: times.map((_, i) =>
       weightedAverage([
@@ -280,16 +280,10 @@ function blendDailySeries(tomorrowDaily, weatherApiDaily, openMeteoDaily) {
       )
     ),
     sunrise: times.map((_, i) =>
-      firstAvailable(
-        weatherApiDaily.sunrise?.[i],
-        openMeteoDaily.sunrise?.[i]
-      )
+      firstAvailable(weatherApiDaily.sunrise?.[i], openMeteoDaily.sunrise?.[i])
     ),
     sunset: times.map((_, i) =>
-      firstAvailable(
-        weatherApiDaily.sunset?.[i],
-        openMeteoDaily.sunset?.[i]
-      )
+      firstAvailable(weatherApiDaily.sunset?.[i], openMeteoDaily.sunset?.[i])
     ),
     uv_index_max: times.map((_, i) =>
       firstAvailable(
@@ -484,6 +478,15 @@ app.get("/api/weather", async (req, res) => {
       daily: mergedDaily,
       hourly: mergedHourly,
       monthly,
+
+      debug: {
+        tomorrowHourlyCount: tomorrowHourly.time.length,
+        weatherApiHourlyCount: weatherApiHourly.time.length,
+        openMeteoHourlyCount: openMeteoHourly.time.length,
+        tomorrowDailyCount: tomorrowDaily.time.length,
+        weatherApiDailyCount: weatherApiDaily.time.length,
+        openMeteoDailyCount: openMeteoDaily.time.length
+      },
 
       source: {
         primary_current: "Blended (Tomorrow + WeatherAPI + Open-Meteo)",
