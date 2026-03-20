@@ -406,10 +406,10 @@ app.get("/api/weather", async (req, res) => {
       return idx;
     })();
 
-    const currentTemp = weightedAverage([
-      { value: weatherApiData.current?.temp_c, weight: 0.55 },
-      { value: openMeteoWeather.current?.temperature_2m, weight: 0.45 }
-    ]);
+    const currentTemp = firstAvailable(
+  openMeteoWeather.current?.temperature_2m,
+  weatherApiData.current?.temp_c
+);
 
     const currentHumidity = weightedAverage([
       { value: weatherApiData.current?.humidity, weight: 0.55 },
@@ -462,7 +462,7 @@ app.get("/api/weather", async (req, res) => {
       },
 
       source: {
-        primary_current_temp: "WeatherAPI + Open-Meteo",
+        primary_current_temp: "Open-Meteo",
         primary_current_condition: "Open-Meteo",
         primary_hourly: "WeatherAPI + Open-Meteo",
         primary_daily_temp: "Tomorrow.io + WeatherAPI + Open-Meteo",
