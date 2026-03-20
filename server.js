@@ -214,8 +214,8 @@ function mergeDaily(openMeteoDaily, weatherApiDaily, tomorrowDaily) {
         0
       )
     ),
-    temperature_2m_max: openMeteoDaily.temperature_2m_max?.length ? openMeteoDaily.temperature_2m_max : weatherApiDaily.temperature_2m_max,
-    temperature_2m_min: openMeteoDaily.temperature_2m_min?.length ? openMeteoDaily.temperature_2m_min : weatherApiDaily.temperature_2m_min,
+    temperature_2m_max: openMeteoDaily.temperature_2m_max || [],
+    temperature_2m_min: openMeteoDaily.temperature_2m_min || [],
     precipitation_probability_max: times.map((_, i) =>
       firstAvailable(
         openMeteoDaily.precipitation_probability_max?.[i],
@@ -225,13 +225,26 @@ function mergeDaily(openMeteoDaily, weatherApiDaily, tomorrowDaily) {
       )
     ),
     sunrise: times.map((_, i) =>
-      firstAvailable(openMeteoDaily.sunrise?.[i], weatherApiDaily.sunrise?.[i], null)
+      firstAvailable(
+        openMeteoDaily.sunrise?.[i],
+        weatherApiDaily.sunrise?.[i],
+        null
+      )
     ),
     sunset: times.map((_, i) =>
-      firstAvailable(openMeteoDaily.sunset?.[i], weatherApiDaily.sunset?.[i], null)
+      firstAvailable(
+        openMeteoDaily.sunset?.[i],
+        weatherApiDaily.sunset?.[i],
+        null
+      )
     ),
     uv_index_max: times.map((_, i) =>
-      firstAvailable(openMeteoDaily.uv_index_max?.[i], weatherApiDaily.uv_index_max?.[i], tomorrowDaily.uv_index_max?.[i], 0)
+      firstAvailable(
+        openMeteoDaily.uv_index_max?.[i],
+        weatherApiDaily.uv_index_max?.[i],
+        tomorrowDaily.uv_index_max?.[i],
+        0
+      )
     )
   };
 }function mergeMonthlyData(historical, forecast) {
