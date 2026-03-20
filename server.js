@@ -196,7 +196,15 @@ function buildDailyFromOpenMeteo(openMeteoWeather) {
     uv_index_max: openMeteoWeather.daily?.uv_index_max || []
   };
 }
+function weightedAverage(weightedValues) {
+  const valid = weightedValues.filter(item => item.value !== undefined && item.value !== null && !isNaN(item.value));
+  if (!valid.length) return null;
 
+  const totalWeight = valid.reduce((sum, item) => sum + item.weight, 0);
+  const weightedSum = valid.reduce((sum, item) => sum + item.value * item.weight, 0);
+
+  return weightedSum / totalWeight;
+}
 function mergeDaily(openMeteoDaily, weatherApiDaily, tomorrowDaily) {
   const times = tomorrowDaily.time?.length
     ? tomorrowDaily.time
