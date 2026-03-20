@@ -228,7 +228,25 @@ function mergeMonthlyData(historical, forecast) {
 app.get("/", (req, res) => {
   res.send("Moga weather backend is running");
 });
+function findNearestHourlyIndex(hourlyTimes) {
+  if (!hourlyTimes || !hourlyTimes.length) return 0;
 
+  const now = new Date();
+  let nearestIndex = 0;
+  let nearestDiff = Infinity;
+
+  for (let i = 0; i < hourlyTimes.length; i++) {
+    const t = new Date(hourlyTimes[i]);
+    const diff = Math.abs(now.getTime() - t.getTime());
+
+    if (!isNaN(t.getTime()) && diff < nearestDiff) {
+      nearestDiff = diff;
+      nearestIndex = i;
+    }
+  }
+
+  return nearestIndex;
+}
 app.get("/api/weather", async (req, res) => {
   try {
     const requestedCity = (req.query.city || "moga").toLowerCase();
@@ -282,7 +300,7 @@ app.get("/api/weather", async (req, res) => {
 
     const hourly = buildHourlyFromOpenMeteo(openMeteoWeather);
     const monthly = mergeMonthlyData(openMeteoHistorical, daily);
-
+    const nearestHourlyIndex = findNearestHourlyIndex(hourly.time);
     const nearestAirIndex = (() => {
       const arr = openMeteoAir.hourly?.time || [];
       if (!arr.length) return 0;
@@ -313,7 +331,7 @@ app.get("/api/weather", async (req, res) => {
 
       current: {
   temperature_c: firstAvailable(
-    hourly.temperature_2m?.[0],
+    hourly.temperature_2m?.[nearestHourlyIndex],
     openMeteoWeather.current?.temperature_2m,
     weatherApiData.current?.temp_c
   ),
@@ -322,12 +340,12 @@ app.get("/api/weather", async (req, res) => {
     weatherApiData.current?.feelslike_c
   ),
   humidity: firstAvailable(
-    hourly.humidity?.[0],
+    hourly.humidity?.[nearestHourlyIndex],
     openMeteoWeather.current?.relative_humidity_2m,
     weatherApiData.current?.humidity
   ),
   wind_kph: firstAvailable(
-    hourly.wind_kph?.[0],
+    hourly.wind_kph?.[nearestHourlyIndex],
     openMeteoWeather.current?.wind_speed_10m,
     weatherApiData.current?.wind_kph
   ),
@@ -340,13 +358,13 @@ app.get("/api/weather", async (req, res) => {
     weatherApiData.current?.pressure_mb
   ),
   is_day: firstAvailable(
-    hourly.is_day?.[0],
+    hourly.is_day?.[nearestHourlyIndex],
     openMeteoWeather.current?.is_day,
     weatherApiData.current?.is_day,
     1
   ),
   weather_code: firstAvailable(
-    hourly.weather_code?.[0],
+    hourly.weather_code?.[nearestHourlyIndex],
     openMeteoWeather.current?.weather_code,
     mapWeatherApiConditionToCode(weatherApiData.current?.condition?.text),
     0
