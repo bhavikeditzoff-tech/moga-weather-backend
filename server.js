@@ -121,12 +121,12 @@ function buildHourlyFromOpenWeather(openWeatherData) {
   const list = openWeatherData.list || [];
 
   list.forEach(item => {
-    const dtText = item.dt_txt ? item.dt_txt.replace(" ", "T") : null;
-    if (!dtText) return;
+    if (!item.dt_txt) return;
 
-    const hour = Number(dtText.split("T")[1]?.split(":")[0] ?? 12);
+    const time = item.dt_txt.replace(" ", "T");
+    const hour = Number(time.split("T")[1]?.split(":")[0] ?? 12);
 
-    hourly.time.push(dtText);
+    hourly.time.push(time);
     hourly.temperature_2m.push(item.main?.temp ?? null);
     hourly.weather_code.push(mapOpenWeatherCodeToCode(item.weather?.[0]?.id));
     hourly.is_day.push(hour >= 6 && hour < 18 ? 1 : 0);
@@ -138,28 +138,28 @@ function buildHourlyFromOpenWeather(openWeatherData) {
   return hourly;
 }
 
-function buildDailyFromTomorrow(dailyTimelines, weatherApiData) {
-  const forecastDays = weatherApiData.forecast?.forecastday || [];
+function buildDailyFromTomorrow(tomorrowDaily, weatherApiData) {
+  const weatherApiDays = weatherApiData.forecast?.forecastday || [];
 
   const sunriseMap = {};
   const sunsetMap = {};
   const uvMap = {};
 
-  forecastDays.forEach(day => {
+  weatherApiDays.forEach(day => {
     sunriseMap[day.date] = `${day.date}T${convert12hTo24h(day.astro?.sunrise)}`;
     sunsetMap[day.date] = `${day.date}T${convert12hTo24h(day.astro?.sunset)}`;
     uvMap[day.date] = day.day?.uv ?? 0;
   });
 
   return {
-    time: dailyTimelines.map(item => item.time.split("T")[0]),
-    weather_code: dailyTimelines.map(item => mapTomorrowCodeToWeatherCode(item.values.weatherCodeMax ?? item.values.weatherCodeMin ?? 1000)),
-    temperature_2m_max: dailyTimelines.map(item => item.values.temperatureMax ?? null),
-    temperature_2m_min: dailyTimelines.map(item => item.values.temperatureMin ?? null),
-    precipitation_probability_max: dailyTimelines.map(item => item.values.precipitationProbabilityMax ?? 0),
-    sunrise: dailyTimelines.map(item => sunriseMap[item.time.split("T")[0]] ?? null),
-    sunset: dailyTimelines.map(item => sunsetMap[item.time.split("T")[0]] ?? null),
-    uv_index_max: dailyTimelines.map(item => uvMap[item.time.split("T")[0]] ?? item.values.uvIndexMax ?? 0)
+    time: tomorrowDaily.map(day => day.time.split("T")[0]),
+    weather_code: tomorrowDaily.map(day => mapTomorrowCodeToWeatherCode(day.values?.weatherCodeMax ?? day.values?.weatherCodeMin ?? 1000)),
+    temperature_2m_max: tomorrowDaily.map(day => day.values?.temperatureMax ?? null),
+    temperature_2m_min: tomorrowDaily.map(day => day.values?.temperatureMin ?? null),
+    precipitation_probability_max: tomorrowDaily.map(day => day.values?.precipitationProbabilityMax ?? 0),
+    sunrise: tomorrowDaily.map(day => sunriseMap[day.time.split("T")[0]] ?? null),
+    sunset: tomorrowDaily.map(day => sunsetMap[day.time.split("T")[0]] ?? null),
+    uv_index_max: tomorrowDaily.map(day => uvMap[day.time.split("T")[0]] ?? day.values?.uvIndexMax ?? 0)
   };
 }
 
@@ -256,9 +256,9 @@ app.get("/api/weather", async (req, res) => {
     const openMeteoAir = await openMeteoAirResponse.json();
     const openMeteoHistorical = await openMeteoHistoricalResponse.json();
 
+    const tomorrowDaily = tomorrowData.timelines?.daily || [];
+    const mergedDaily = buildDailyFromTomorrow(tomorrowDaily, weatherApiData);
     const mergedHourly = buildHourlyFromOpenWeather(openWeatherForecast);
-    const tomorrowDailyTimelines = tomorrowData.timelines?.daily || [];
-    const mergedDaily = buildDailyFromTomorrow(tomorrowDailyTimelines, weatherApiData);
     const monthly = mergeMonthlyData(openMeteoHistorical, mergedDaily);
 
     const nearestHourlyIndex = (() => {
@@ -296,7 +296,7 @@ app.get("/api/weather", async (req, res) => {
       return idx;
     })();
 
-    const mergedData = {
+    res.json({
       location: {
         key: location.key,
         name: firstAvailable(weatherApiData.location?.name, location.name),
@@ -331,9 +331,7 @@ app.get("/api/weather", async (req, res) => {
         monthly_history: "Open-Meteo Archive + Tomorrow.io Merge",
         air_quality: "Open-Meteo Air + WeatherAPI"
       }
-    };
-
-    res.json(mergedData);
+    });
   } catch (error) {
     console.log("BACKEND ERROR:", error);
     res.status(500).json({ error: "Failed to fetch weather data" });
