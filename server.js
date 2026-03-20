@@ -35,31 +35,48 @@ function firstAvailable(...values) {
   return null;
 }
 
+function mapWeatherApiConditionToCode(text) {
+  const lower = (text || "").toLowerCase();
+
+  if (lower.includes("sunny") || lower.includes("clear")) return 0;
+  if (lower.includes("partly cloudy")) return 2;
+  if (lower.includes("cloudy")) return 3;
+  if (lower.includes("overcast")) return 3;
+  if (lower.includes("fog") || lower.includes("mist")) return 45;
+  if (lower.includes("drizzle")) return 53;
+  if (lower.includes("rain")) return 63;
+  if (lower.includes("shower")) return 80;
+  if (lower.includes("thunder")) return 95;
+  if (lower.includes("snow")) return 73;
+
+  return 0;
+}
+
 function mapTomorrowCodeToWeatherCode(code) {
   const map = {
-    1000: 0,   // clear
-    1100: 1,   // mostly clear
-    1101: 2,   // partly cloudy
-    1102: 3,   // mostly cloudy
-    1001: 3,   // cloudy
-    2000: 45,  // fog
-    2100: 45,  // light fog
-    4000: 53,  // drizzle
-    4001: 63,  // rain
-    4200: 80,  // light rain
-    4201: 63,  // heavy rain
-    5000: 73,  // snow
-    5001: 73,  // flurries
-    5100: 73,  // light snow
-    5101: 73,  // heavy snow
-    6000: 53,  // freezing drizzle
-    6001: 63,  // freezing rain
-    6200: 80,  // light freezing rain
-    6201: 63,  // heavy freezing rain
-    7000: 45,  // ice pellets
+    1000: 0,
+    1100: 1,
+    1101: 2,
+    1102: 3,
+    1001: 3,
+    2000: 45,
+    2100: 45,
+    4000: 53,
+    4001: 63,
+    4200: 80,
+    4201: 63,
+    5000: 73,
+    5001: 73,
+    5100: 73,
+    5101: 73,
+    6000: 53,
+    6001: 63,
+    6200: 80,
+    6201: 63,
+    7000: 45,
     7101: 45,
     7102: 45,
-    8000: 95   // thunderstorm
+    8000: 95
   };
 
   return map[code] ?? 0;
@@ -77,16 +94,18 @@ function convert12hTo24h(time12h) {
   return `${hours.padStart(2, "0")}:${minutes}:00`;
 }
 
-function buildDailyFromTomorrow(dailyTimelines) {
+function buildDailyFromWeatherApi(weatherApiData) {
+  const forecastDays = weatherApiData.forecast?.forecastday || [];
+
   return {
-    time: dailyTimelines.map(item => item.time.split("T")[0]),
-    weather_code: dailyTimelines.map(item => mapTomorrowCodeToWeatherCode(item.values.weatherCodeMax ?? item.values.weatherCodeMin ?? 1000)),
-    temperature_2m_max: dailyTimelines.map(item => item.values.temperatureMax ?? null),
-    temperature_2m_min: dailyTimelines.map(item => item.values.temperatureMin ?? null),
-    precipitation_probability_max: dailyTimelines.map(item => item.values.precipitationProbabilityMax ?? 0),
-    sunrise: dailyTimelines.map(item => item.values.sunriseTime || null),
-    sunset: dailyTimelines.map(item => item.values.sunsetTime || null),
-    uv_index_max: dailyTimelines.map(item => item.values.uvIndexMax ?? 0)
+    time: forecastDays.map(day => day.date),
+    weather_code: forecastDays.map(day => mapWeatherApiConditionToCode(day.day?.condition?.text)),
+    temperature_2m_max: forecastDays.map(day => day.day?.maxtemp_c),
+    temperature_2m_min: forecastDays.map(day => day.day?.mintemp_c),
+    precipitation_probability_max: forecastDays.map(day => Number(day.day?.daily_chance_of_rain ?? 0)),
+    sunrise: forecastDays.map(day => `${day.date}T${convert12hTo24h(day.astro?.sunrise)}`),
+    sunset: forecastDays.map(day => `${day.date}T${convert12hTo24h(day.astro?.sunset)}`),
+    uv_index_max: forecastDays.map(day => day.day?.uv ?? 0)
   };
 }
 
@@ -103,6 +122,21 @@ function buildHourlyFromTomorrow(hourlyTimelines) {
     visibility: hourlyTimelines.map(item => item.values.visibility != null ? item.values.visibility * 1000 : null),
     humidity: hourlyTimelines.map(item => item.values.humidity ?? null),
     wind_kph: hourlyTimelines.map(item => item.values.windSpeed != null ? item.values.windSpeed * 3.6 : null)
+  };
+}
+
+function buildDailyFromTomorrow(dailyTimelines, weatherApiData) {
+  const weatherApiDaily = buildDailyFromWeatherApi(weatherApiData);
+
+  return {
+    time: dailyTimelines.map(item => item.time.split("T")[0]),
+    weather_code: dailyTimelines.map(item => mapTomorrowCodeToWeatherCode(item.values.weatherCodeMax ?? item.values.weatherCodeMin ?? 1000)),
+    temperature_2m_max: dailyTimelines.map(item => item.values.temperatureMax ?? null),
+    temperature_2m_min: dailyTimelines.map(item => item.values.temperatureMin ?? null),
+    precipitation_probability_max: dailyTimelines.map(item => item.values.precipitationProbabilityMax ?? 0),
+    sunrise: weatherApiDaily.sunrise,
+    sunset: weatherApiDaily.sunset,
+    uv_index_max: dailyTimelines.map(item => item.values.uvIndexMax ?? 0)
   };
 }
 
@@ -191,7 +225,7 @@ app.get("/api/weather", async (req, res) => {
     const dailyTimelines = tomorrowData.timelines?.daily || [];
 
     const mergedHourly = buildHourlyFromTomorrow(hourlyTimelines);
-    const mergedDaily = buildDailyFromTomorrow(dailyTimelines);
+    const mergedDaily = buildDailyFromTomorrow(dailyTimelines, weatherApiData);
 
     const nearestHourlyIndex = (() => {
       if (!mergedHourly.time.length) return 0;
