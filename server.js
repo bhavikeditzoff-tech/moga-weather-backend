@@ -289,7 +289,59 @@ function mergeMonthlyData(historical, forecast) {
 app.get("/", (req, res) => {
   res.send("Moga weather backend is running");
 });
+function blendHourlySeries(primary, secondary, tertiary) {
+  const times = primary.time?.length
+    ? primary.time
+    : secondary.time?.length
+    ? secondary.time
+    : tertiary.time || [];
 
+  return {
+    time: times,
+    temperature_2m: times.map((_, i) =>
+      weightedAverage([
+        { value: primary.temperature_2m?.[i], weight: 0.5 },
+        { value: secondary.temperature_2m?.[i], weight: 0.3 },
+        { value: tertiary.temperature_2m?.[i], weight: 0.2 }
+      ])
+    ),
+    weather_code: times.map((_, i) =>
+      firstAvailable(
+        primary.weather_code?.[i],
+        secondary.weather_code?.[i],
+        tertiary.weather_code?.[i]
+      )
+    ),
+    is_day: times.map((_, i) =>
+      firstAvailable(
+        primary.is_day?.[i],
+        secondary.is_day?.[i],
+        tertiary.is_day?.[i]
+      )
+    ),
+    visibility: times.map((_, i) =>
+      weightedAverage([
+        { value: primary.visibility?.[i], weight: 0.45 },
+        { value: secondary.visibility?.[i], weight: 0.35 },
+        { value: tertiary.visibility?.[i], weight: 0.2 }
+      ])
+    ),
+    humidity: times.map((_, i) =>
+      weightedAverage([
+        { value: primary.humidity?.[i], weight: 0.45 },
+        { value: secondary.humidity?.[i], weight: 0.35 },
+        { value: tertiary.humidity?.[i], weight: 0.2 }
+      ])
+    ),
+    wind_kph: times.map((_, i) =>
+      weightedAverage([
+        { value: primary.wind_kph?.[i], weight: 0.45 },
+        { value: secondary.wind_kph?.[i], weight: 0.35 },
+        { value: tertiary.wind_kph?.[i], weight: 0.2 }
+      ])
+    )
+  };
+}
 app.get("/api/weather", async (req, res) => {
   try {
     const requestedCity = (req.query.city || "moga").toLowerCase();
