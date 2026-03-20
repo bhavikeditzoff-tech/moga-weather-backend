@@ -173,8 +173,11 @@ function buildDailyFromWeatherApi(weatherApiData) {
 
   return {
     time: forecastDays.map(day => day.date),
+    weather_code: forecastDays.map(day => mapWeatherApiConditionToCode(day.day?.condition?.text)),
+    weather_text: forecastDays.map(day => day.day?.condition?.text ?? ""),
     temperature_2m_max: forecastDays.map(day => day.day?.maxtemp_c),
     temperature_2m_min: forecastDays.map(day => day.day?.mintemp_c),
+    precipitation_probability_max: forecastDays.map(day => Number(day.day?.daily_chance_of_rain ?? 0)),
     sunrise: forecastDays.map(day => `${day.date}T${convert12hTo24h(day.astro?.sunrise)}`),
     sunset: forecastDays.map(day => `${day.date}T${convert12hTo24h(day.astro?.sunset)}`),
     uv_index_max: forecastDays.map(day => day.day?.uv ?? 0)
@@ -204,16 +207,22 @@ function mergeDaily(openMeteoDaily, weatherApiDaily, tomorrowDaily) {
   return {
     time: times,
     weather_code: times.map((_, i) =>
-  firstAvailable(
-    tomorrowDaily.weather_code?.[i],
-    openMeteoDaily.weather_code?.[i],
-    0
-  )
-),
+      firstAvailable(
+        weatherApiDaily.weather_code?.[i],
+        tomorrowDaily.weather_code?.[i],
+        openMeteoDaily.weather_code?.[i],
+        0
+      )
+    ),
     temperature_2m_max: openMeteoDaily.temperature_2m_max?.length ? openMeteoDaily.temperature_2m_max : weatherApiDaily.temperature_2m_max,
     temperature_2m_min: openMeteoDaily.temperature_2m_min?.length ? openMeteoDaily.temperature_2m_min : weatherApiDaily.temperature_2m_min,
     precipitation_probability_max: times.map((_, i) =>
-      firstAvailable(openMeteoDaily.precipitation_probability_max?.[i], tomorrowDaily.precipitation_probability_max?.[i], 0)
+      firstAvailable(
+        openMeteoDaily.precipitation_probability_max?.[i],
+        tomorrowDaily.precipitation_probability_max?.[i],
+        weatherApiDaily.precipitation_probability_max?.[i],
+        0
+      )
     ),
     sunrise: times.map((_, i) =>
       firstAvailable(openMeteoDaily.sunrise?.[i], weatherApiDaily.sunrise?.[i], null)
@@ -225,9 +234,7 @@ function mergeDaily(openMeteoDaily, weatherApiDaily, tomorrowDaily) {
       firstAvailable(openMeteoDaily.uv_index_max?.[i], weatherApiDaily.uv_index_max?.[i], tomorrowDaily.uv_index_max?.[i], 0)
     )
   };
-}
-
-function mergeMonthlyData(historical, forecast) {
+}function mergeMonthlyData(historical, forecast) {
   const map = {};
 
   const addDay = (date, code, max, min) => {
