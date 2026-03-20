@@ -198,11 +198,11 @@ function buildDailyFromOpenMeteo(openMeteoWeather) {
 }
 
 function mergeDaily(openMeteoDaily, weatherApiDaily, tomorrowDaily) {
-  const times = openMeteoDaily.time?.length
+  const times = tomorrowDaily.time?.length
+    ? tomorrowDaily.time
+    : openMeteoDaily.time?.length
     ? openMeteoDaily.time
-    : weatherApiDaily.time?.length
-    ? weatherApiDaily.time
-    : tomorrowDaily.time || [];
+    : weatherApiDaily.time || [];
 
   return {
     time: times,
@@ -216,6 +216,7 @@ function mergeDaily(openMeteoDaily, weatherApiDaily, tomorrowDaily) {
     ),
     temperature_2m_max: times.map((_, i) =>
       firstAvailable(
+        tomorrowDaily.temperature_2m_max?.[i],
         openMeteoDaily.temperature_2m_max?.[i],
         weatherApiDaily.temperature_2m_max?.[i],
         null
@@ -223,6 +224,7 @@ function mergeDaily(openMeteoDaily, weatherApiDaily, tomorrowDaily) {
     ),
     temperature_2m_min: times.map((_, i) =>
       firstAvailable(
+        tomorrowDaily.temperature_2m_min?.[i],
         openMeteoDaily.temperature_2m_min?.[i],
         weatherApiDaily.temperature_2m_min?.[i],
         null
