@@ -312,18 +312,58 @@ app.get("/api/weather", async (req, res) => {
       },
 
       current: {
-        temperature_c: firstAvailable(openMeteoWeather.current?.temperature_2m, weatherApiData.current?.temp_c),
-        feelslike_c: firstAvailable(openMeteoWeather.current?.apparent_temperature, weatherApiData.current?.feelslike_c),
-        humidity: firstAvailable(openMeteoWeather.current?.relative_humidity_2m, weatherApiData.current?.humidity),
-        wind_kph: firstAvailable(openMeteoWeather.current?.wind_speed_10m, weatherApiData.current?.wind_kph),
-        wind_degree: firstAvailable(openMeteoWeather.current?.wind_direction_10m, weatherApiData.current?.wind_degree),
-        pressure_hpa: firstAvailable(openMeteoWeather.current?.surface_pressure, weatherApiData.current?.pressure_mb),
-        is_day: firstAvailable(openMeteoWeather.current?.is_day, weatherApiData.current?.is_day, 1),
-        weather_code: firstAvailable(openMeteoWeather.current?.weather_code, mapWeatherApiConditionToCode(weatherApiData.current?.condition?.text), 0),
-        condition_text: firstAvailable(weatherApiData.current?.condition?.text, null),
-        uv: firstAvailable(daily.uv_index_max?.[0], weatherApiData.current?.uv),
-        air_quality_pm25: firstAvailable(openMeteoAir.hourly?.pm2_5?.[nearestAirIndex], weatherApiData.current?.air_quality?.pm2_5)
-      },
+  temperature_c: firstAvailable(
+    hourly.temperature_2m?.[0],
+    openMeteoWeather.current?.temperature_2m,
+    weatherApiData.current?.temp_c
+  ),
+  feelslike_c: firstAvailable(
+    openMeteoWeather.current?.apparent_temperature,
+    weatherApiData.current?.feelslike_c
+  ),
+  humidity: firstAvailable(
+    hourly.humidity?.[0],
+    openMeteoWeather.current?.relative_humidity_2m,
+    weatherApiData.current?.humidity
+  ),
+  wind_kph: firstAvailable(
+    hourly.wind_kph?.[0],
+    openMeteoWeather.current?.wind_speed_10m,
+    weatherApiData.current?.wind_kph
+  ),
+  wind_degree: firstAvailable(
+    openMeteoWeather.current?.wind_direction_10m,
+    weatherApiData.current?.wind_degree
+  ),
+  pressure_hpa: firstAvailable(
+    openMeteoWeather.current?.surface_pressure,
+    weatherApiData.current?.pressure_mb
+  ),
+  is_day: firstAvailable(
+    hourly.is_day?.[0],
+    openMeteoWeather.current?.is_day,
+    weatherApiData.current?.is_day,
+    1
+  ),
+  weather_code: firstAvailable(
+    hourly.weather_code?.[0],
+    openMeteoWeather.current?.weather_code,
+    mapWeatherApiConditionToCode(weatherApiData.current?.condition?.text),
+    0
+  ),
+  condition_text: firstAvailable(
+    weatherApiData.current?.condition?.text,
+    null
+  ),
+  uv: firstAvailable(
+    daily.uv_index_max?.[0],
+    weatherApiData.current?.uv
+  ),
+  air_quality_pm25: firstAvailable(
+    openMeteoAir.hourly?.pm2_5?.[nearestAirIndex],
+    weatherApiData.current?.air_quality?.pm2_5
+  )
+},
 
       daily,
       hourly,
