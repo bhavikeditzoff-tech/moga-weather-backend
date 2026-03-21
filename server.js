@@ -124,7 +124,7 @@ async function resolveLocation(query) {
 
     return {
       key: "coords",
-      name: place?.name || "Current Location",
+      name: place?.name || "Selected Location",
       region: place?.admin1 || place?.admin2 || "",
       country: place?.country || "",
       lat,
@@ -158,8 +158,36 @@ async function resolveLocation(query) {
   return PRESET_LOCATIONS.moga;
 }
 
+async function resolveIpLocation(req) {
+  try {
+    const forwarded = req.headers["x-forwarded-for"];
+    const ip =
+      (Array.isArray(forwarded) ? forwarded[0] : forwarded?.split(",")[0])?.trim() ||
+      req.socket?.remoteAddress ||
+      "";
+
+    // Skip localhost/private IP fallback
+    const geo = await safelyFetch("https://ipapi.co/json/", "IPAPI");
+    if (!geo || !geo.latitude || !geo.longitude) {
+      return PRESET_LOCATIONS.moga;
+    }
+
+    return {
+      key: "ip",
+      name: geo.city || "Your Location",
+      region: geo.region || "",
+      country: geo.country_name || "",
+      lat: Number(geo.latitude),
+      lon: Number(geo.longitude)
+    };
+  } catch (err) {
+    console.log("IP location resolve error:", err);
+    return PRESET_LOCATIONS.moga;
+  }
+}
+
 app.get("/", (req, res) => {
-  res.send("Moga weather backend is running");
+  res.send("RealWeather backend is running");
 });
 
 app.get("/api/search", async (req, res) => {
@@ -188,7 +216,13 @@ app.get("/api/search", async (req, res) => {
 
 app.get("/api/weather", async (req, res) => {
   try {
-    const location = await resolveLocation(req.query);
+    let location;
+
+    if (req.query.lat != null || req.query.lon != null || req.query.city) {
+      location = await resolveLocation(req.query);
+    } else {
+      location = await resolveIpLocation(req);
+    }
 
     const now = new Date();
     const year = now.getFullYear();
