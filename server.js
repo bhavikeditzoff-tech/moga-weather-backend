@@ -116,17 +116,33 @@ async function resolveLocation(query) {
   const lon = query.lon != null ? Number(query.lon) : null;
 
   if (lat != null && lon != null && !isNaN(lat) && !isNaN(lon)) {
-    const reverseGeoUrl =
-      `https://geocoding-api.open-meteo.com/v1/reverse?latitude=${lat}&longitude=${lon}&language=en&format=json`;
+    // Open-Meteo does NOT have a reverse geocoding endpoint.
+    // Use the forward search with coordinates via WeatherAPI instead,
+    // or simply pass coords through and let the caller provide the name.
+    
+    // Try WeatherAPI search for reverse geocoding
+    const waSearchUrl = `https://api.weatherapi.com/v1/search.json?key=${WEATHERAPI_KEY}&q=${lat},${lon}`;
+    const waResults = await safelyFetch(waSearchUrl, "WeatherAPI-ReverseGeo");
+    
+    if (waResults && waResults.length > 0) {
+      const place = waResults[0];
+      return {
+        key: "coords",
+        name: place.name || "Unknown location",
+        region: place.region || "",
+        country: place.country || "",
+        lat,
+        lon
+      };
+    }
 
-    const reverseGeo = await safelyFetch(reverseGeoUrl, "OpenMeteo-ReverseGeocoding");
-    const place = reverseGeo?.results?.[0];
-
+    // Fallback: try Open-Meteo forward search with a nearby city approach
+    // won't work well, so just return coords with no name
     return {
       key: "coords",
-      name: place?.name || "Unknown location",
-      region: place?.admin1 || place?.admin2 || "",
-      country: place?.country || "",
+      name: "",  // Empty, so client-side name won't be overwritten
+      region: "",
+      country: "",
       lat,
       lon
     };
@@ -157,7 +173,6 @@ async function resolveLocation(query) {
 
   return PRESET_LOCATIONS.moga;
 }
-
 async function resolveIpLocation() {
   try {
     const geo = await safelyFetch("https://ipapi.co/json/", "IPAPI");
