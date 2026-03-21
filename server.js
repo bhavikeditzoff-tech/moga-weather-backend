@@ -124,7 +124,7 @@ async function resolveLocation(query) {
 
     return {
       key: "coords",
-      name: place?.name || "Selected Location",
+      name: place?.name || "Unknown location",
       region: place?.admin1 || place?.admin2 || "",
       country: place?.country || "",
       lat,
@@ -158,15 +158,8 @@ async function resolveLocation(query) {
   return PRESET_LOCATIONS.moga;
 }
 
-async function resolveIpLocation(req) {
+async function resolveIpLocation() {
   try {
-    const forwarded = req.headers["x-forwarded-for"];
-    const ip =
-      (Array.isArray(forwarded) ? forwarded[0] : forwarded?.split(",")[0])?.trim() ||
-      req.socket?.remoteAddress ||
-      "";
-
-    // Skip localhost/private IP fallback
     const geo = await safelyFetch("https://ipapi.co/json/", "IPAPI");
     if (!geo || !geo.latitude || !geo.longitude) {
       return PRESET_LOCATIONS.moga;
@@ -174,7 +167,7 @@ async function resolveIpLocation(req) {
 
     return {
       key: "ip",
-      name: geo.city || "Your Location",
+      name: geo.city || "Unknown location",
       region: geo.region || "",
       country: geo.country_name || "",
       lat: Number(geo.latitude),
@@ -221,7 +214,7 @@ app.get("/api/weather", async (req, res) => {
     if (req.query.lat != null || req.query.lon != null || req.query.city) {
       location = await resolveLocation(req.query);
     } else {
-      location = await resolveIpLocation(req);
+      location = await resolveIpLocation();
     }
 
     const now = new Date();
