@@ -109,33 +109,43 @@ function findNearestIndex(timeArray) {
 }
 
 async function resolveLocation(query) {
-  const requestedCity = (query.city || "").toLowerCase().trim();
-  const lat = query.lat ? Number(query.lat) : null;
-  const lon = query.lon ? Number(query.lon) : null;
+  const requestedCity = (query.city || "").trim();
+  const requestedCityKey = requestedCity.toLowerCase();
+
+  const lat = query.lat != null ? Number(query.lat) : null;
+  const lon = query.lon != null ? Number(query.lon) : null;
 
   if (lat != null && lon != null && !isNaN(lat) && !isNaN(lon)) {
+    const reverseGeoUrl =
+      `https://geocoding-api.open-meteo.com/v1/reverse?latitude=${lat}&longitude=${lon}&language=en&format=json`;
+
+    const reverseGeo = await safelyFetch(reverseGeoUrl, "OpenMeteo-ReverseGeocoding");
+    const place = reverseGeo?.results?.[0];
+
     return {
       key: "coords",
-      name: "Current Location",
-      region: "",
-      country: "",
+      name: place?.name || "Current Location",
+      region: place?.admin1 || place?.admin2 || "",
+      country: place?.country || "",
       lat,
       lon
     };
   }
 
-  if (requestedCity && PRESET_LOCATIONS[requestedCity]) {
-    return PRESET_LOCATIONS[requestedCity];
+  if (requestedCityKey && PRESET_LOCATIONS[requestedCityKey]) {
+    return PRESET_LOCATIONS[requestedCityKey];
   }
 
   if (requestedCity) {
-    const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(requestedCity)}&count=1&language=en&format=json`;
-    const geoData = await safelyFetch(geoUrl, "OpenMeteo-Geocoding");
+    const geoUrl =
+      `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(requestedCity)}&count=1&language=en&format=json`;
 
-    if (geoData?.results?.length) {
-      const place = geoData.results[0];
+    const geoData = await safelyFetch(geoUrl, "OpenMeteo-Geocoding");
+    const place = geoData?.results?.[0];
+
+    if (place) {
       return {
-        key: requestedCity,
+        key: requestedCityKey || "search",
         name: place.name || requestedCity,
         region: place.admin1 || place.admin2 || "",
         country: place.country || "",
@@ -150,6 +160,30 @@ async function resolveLocation(query) {
 
 app.get("/", (req, res) => {
   res.send("Moga weather backend is running");
+});
+
+app.get("/api/search", async (req, res) => {
+  try {
+    const q = (req.query.q || "").trim();
+    if (!q) return res.json({ results: [] });
+
+    const geoUrl =
+      `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=8&language=en&format=json`;
+
+    const geoData = await safelyFetch(geoUrl, "OpenMeteo-Search");
+    const results = (geoData?.results || []).map(item => ({
+      name: item.name || "",
+      region: item.admin1 || item.admin2 || "",
+      country: item.country || "",
+      latitude: item.latitude,
+      longitude: item.longitude
+    }));
+
+    res.json({ results });
+  } catch (error) {
+    console.log("SEARCH ERROR:", error);
+    res.status(500).json({ results: [] });
+  }
 });
 
 app.get("/api/weather", async (req, res) => {
@@ -320,22 +354,6 @@ app.get("/api/weather", async (req, res) => {
         weatherApiDaysCount: weatherApiForecastDays.length,
         monthlyCount: monthly.length,
         locationResolved: location.name
-      },
-
-      source: {
-        hourly_temp: "Open-Meteo",
-        hourly_conditions: "Open-Meteo",
-        hourly_humidity_wind: "WeatherAPI",
-        daily: "Open-Meteo",
-        current_temp: waCurrent.temp_c != null ? "WeatherAPI" : "Open-Meteo",
-        current_humidity: "WeatherAPI",
-        current_feels_like: "WeatherAPI",
-        current_wind: "WeatherAPI",
-        current_pressure: "WeatherAPI",
-        conditions_code: "Open-Meteo",
-        sunrise_sunset: "Open-Meteo",
-        air_quality: "Open-Meteo Air → WeatherAPI",
-        monthly: "Open-Meteo Archive + forecast"
       }
     });
   } catch (error) {
@@ -344,6 +362,7 @@ app.get("/api/weather", async (req, res) => {
   }
 });
 
-app.listen(3000, () => {
-  console.log("Server running on http://localhost:3000");
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
 });
