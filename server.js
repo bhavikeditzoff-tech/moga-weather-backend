@@ -108,25 +108,41 @@ async function getAccuWeatherHourly(locationKey) {
   const url = `http://dataservice.accuweather.com/forecasts/v1/hourly/12hour/${locationKey}?apikey=${ACCUWEATHER_API_KEY}&details=true&metric=true`;
   const res = await fetch(url);
   const data = await res.json();
-  return Array.isArray(data) ? data : [];
+  return Array.isArray(data) ? data : null;
 }
 
 function buildCurrentFromAccuWeather(currentData) {
+  if (!currentData) return null;
+
   return {
-    temperature_c: currentData?.Temperature?.Metric?.Value ?? null,
-    feelslike_c: currentData?.RealFeelTemperature?.Metric?.Value ?? null,
-    humidity: currentData?.RelativeHumidity ?? null,
-    wind_kph: currentData?.Wind?.Speed?.Metric?.Value ?? null,
-    wind_degree: currentData?.Wind?.Direction?.Degrees ?? null,
-    pressure_hpa: currentData?.Pressure?.Metric?.Value ?? null,
-    is_day: currentData?.IsDayTime ? 1 : 0,
-    weather_code: mapAccuWeatherIconToCode(currentData?.WeatherIcon),
-    condition_text: currentData?.WeatherText ?? null,
-    uv: currentData?.UVIndexFloat ?? currentData?.UVIndex ?? null
+    temperature_c: currentData.Temperature?.Metric?.Value ?? null,
+    feelslike_c: currentData.RealFeelTemperature?.Metric?.Value ?? null,
+    humidity: currentData.RelativeHumidity ?? null,
+    wind_kph: currentData.Wind?.Speed?.Metric?.Value ?? null,
+    wind_degree: currentData.Wind?.Direction?.Degrees ?? null,
+    pressure_hpa: currentData.Pressure?.Metric?.Value ?? null,
+    is_day: currentData.IsDayTime ? 1 : 0,
+    weather_code: mapAccuWeatherIconToCode(currentData.WeatherIcon),
+    condition_text: currentData.WeatherText ?? null,
+    uv: firstAvailable(currentData.UVIndexFloat, currentData.UVIndex)
   };
 }
 
 function buildHourlyFromAccuWeather(hourlyData) {
+  if (!Array.isArray(hourlyData)) {
+    return {
+      time: [],
+      temperature_2m: [],
+      weather_code: [],
+      is_day: [],
+      visibility: [],
+      humidity: [],
+      wind_kph: [],
+      precipitation_probability: [],
+      uv: []
+    };
+  }
+
   return {
     time: hourlyData.map(item => item.DateTime),
     temperature_2m: hourlyData.map(item => item.Temperature?.Value ?? null),
@@ -136,7 +152,7 @@ function buildHourlyFromAccuWeather(hourlyData) {
     humidity: hourlyData.map(item => item.RelativeHumidity ?? null),
     wind_kph: hourlyData.map(item => item.Wind?.Speed?.Value ?? null),
     precipitation_probability: hourlyData.map(item => item.PrecipitationProbability ?? null),
-    uv: hourlyData.map(item => item.UVIndexFloat ?? item.UVIndex ?? null)
+    uv: hourlyData.map(item => firstAvailable(item.UVIndexFloat, item.UVIndex))
   };
 }
 
@@ -218,7 +234,7 @@ app.get("/api/weather", async (req, res) => {
     const openMeteoHistoricalUrl =
       `https://archive-api.open-meteo.com/v1/archive?latitude=${location.lat}&longitude=${location.lon}&start_date=${monthStart}&end_date=${yesterday}&daily=weather_code,temperature_2m_max,temperature_2m_min&timezone=auto`;
 
-    const [accuCurrent, accuHourly, weatherApiResponse, openMeteoAirResponse, openMeteoHistoricalResponse] = await Promise.all([
+    const [accuCurrentRaw, accuHourlyRaw, weatherApiData, openMeteoAir, openMeteoHistorical] = await Promise.all([
       getAccuWeatherCurrent(locationKey),
       getAccuWeatherHourly(locationKey),
       fetch(weatherApiUrl).then(r => r.json()),
@@ -226,12 +242,8 @@ app.get("/api/weather", async (req, res) => {
       fetch(openMeteoHistoricalUrl).then(r => r.json())
     ]);
 
-    const weatherApiData = weatherApiResponse;
-    const openMeteoAir = openMeteoAirResponse;
-    const openMeteoHistorical = openMeteoHistoricalResponse;
-
-    const current = buildCurrentFromAccuWeather(accuCurrent);
-    const hourly = buildHourlyFromAccuWeather(accuHourly);
+    const current = buildCurrentFromAccuWeather(accuCurrentRaw);
+    const hourly = buildHourlyFromAccuWeather(accuHourlyRaw);
     const daily = buildDailyFromWeatherApi(weatherApiData);
     const monthly = mergeMonthlyData(openMeteoHistorical, daily);
 
@@ -264,16 +276,16 @@ app.get("/api/weather", async (req, res) => {
       },
 
       current: {
-        temperature_c: current.temperature_c,
-        feelslike_c: firstAvailable(current.feelslike_c, weatherApiData.current?.feelslike_c),
-        humidity: firstAvailable(current.humidity, weatherApiData.current?.humidity),
-        wind_kph: firstAvailable(current.wind_kph, weatherApiData.current?.wind_kph),
-        wind_degree: firstAvailable(current.wind_degree, weatherApiData.current?.wind_degree),
-        pressure_hpa: firstAvailable(current.pressure_hpa, weatherApiData.current?.pressure_mb),
-        is_day: firstAvailable(current.is_day, weatherApiData.current?.is_day, 1),
-        weather_code: firstAvailable(current.weather_code, mapWeatherApiConditionToCode(weatherApiData.current?.condition?.text), 0),
-        condition_text: firstAvailable(current.condition_text, weatherApiData.current?.condition?.text),
-        uv: firstAvailable(current.uv, weatherApiData.current?.uv),
+        temperature_c: firstAvailable(current?.temperature_c, weatherApiData.current?.temp_c),
+        feelslike_c: firstAvailable(current?.feelslike_c, weatherApiData.current?.feelslike_c),
+        humidity: firstAvailable(current?.humidity, weatherApiData.current?.humidity),
+        wind_kph: firstAvailable(current?.wind_kph, weatherApiData.current?.wind_kph),
+        wind_degree: firstAvailable(current?.wind_degree, weatherApiData.current?.wind_degree),
+        pressure_hpa: firstAvailable(current?.pressure_hpa, weatherApiData.current?.pressure_mb),
+        is_day: firstAvailable(current?.is_day, weatherApiData.current?.is_day, 1),
+        weather_code: firstAvailable(current?.weather_code, mapWeatherApiConditionToCode(weatherApiData.current?.condition?.text), 0),
+        condition_text: firstAvailable(current?.condition_text, weatherApiData.current?.condition?.text),
+        uv: firstAvailable(current?.uv, weatherApiData.current?.uv),
         air_quality_pm25: firstAvailable(openMeteoAir.hourly?.pm2_5?.[nearestAirIndex], weatherApiData.current?.air_quality?.pm2_5)
       },
 
@@ -283,7 +295,8 @@ app.get("/api/weather", async (req, res) => {
 
       debug: {
         accuweatherLocationKey: locationKey,
-        accuweatherHourlyCount: hourly.time.length,
+        accuweatherCurrentLoaded: !!accuCurrentRaw,
+        accuweatherHourlyCount: Array.isArray(accuHourlyRaw) ? accuHourlyRaw.length : 0,
         weatherApiDailyCount: daily.time.length,
         monthlyHistoricalCount: openMeteoHistorical.daily?.time?.length || 0
       },
