@@ -230,6 +230,7 @@ app.get("/api/weather", async (req, res) => {
     const omHourly = openMeteoForecast?.hourly || {};
     const omDaily = openMeteoForecast?.daily || {};
     const omCurrent = openMeteoForecast?.current || {};
+    const omTimezone = openMeteoForecast?.timezone || "UTC";
 
     const waCurrent = weatherApiData?.current || {};
     const weatherApiForecastDays = weatherApiData?.forecast?.forecastday || [];
@@ -259,9 +260,24 @@ app.get("/api/weather", async (req, res) => {
 
       for (const isoTime of omHourly.time) {
         const d = new Date(isoTime);
-        const localKey =
-          `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:00`;
+
+        const localParts = new Intl.DateTimeFormat("en-CA", {
+          timeZone: omTimezone,
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          hourCycle: "h23"
+        }).formatToParts(d);
+
+        const year = localParts.find(p => p.type === "year")?.value;
+        const month = localParts.find(p => p.type === "month")?.value;
+        const day = localParts.find(p => p.type === "day")?.value;
+        const hour = localParts.find(p => p.type === "hour")?.value;
+
+        const localKey = `${year}-${month}-${day} ${hour}:00`;
         const waHour = waHourlyMap[localKey];
+
         finalHourly.humidity.push(waHour?.humidity ?? null);
         finalHourly.wind_kph.push(waHour?.wind_kph ?? null);
       }
@@ -320,13 +336,16 @@ app.get("/api/weather", async (req, res) => {
     );
 
     res.json({
+      timezone: omTimezone,
+
       location: {
         key: location.key,
         name: location.name,
         region: location.region,
         country: location.country,
         latitude: location.lat,
-        longitude: location.lon
+        longitude: location.lon,
+        timezone: omTimezone
       },
 
       current: {
@@ -353,7 +372,8 @@ app.get("/api/weather", async (req, res) => {
         weatherApiCurrentOk: waCurrent.temp_c != null,
         weatherApiDaysCount: weatherApiForecastDays.length,
         monthlyCount: monthly.length,
-        locationResolved: location.name
+        locationResolved: location.name,
+        timezone: omTimezone
       }
     });
   } catch (error) {
