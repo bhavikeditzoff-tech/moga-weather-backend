@@ -10,8 +10,8 @@ const WEATHERAPI_KEY = process.env.WEATHERAPI_KEY;
 
 /* ───── IN-MEMORY CACHE ───── */
 
-const cache = {};
-const CACHE_DURATION = 10 * 60 * 1000; // 10 minutes
+var cache = {};
+var CACHE_DURATION = 10 * 60 * 1000;
 
 function getCacheKey(lat, lon) {
   return Math.round(lat * 100) / 100 + "," + Math.round(lon * 100) / 100;
@@ -28,7 +28,6 @@ function getCached(key) {
 }
 
 function setCache(key, data) {
-  // Keep cache small — max 100 entries
   var keys = Object.keys(cache);
   if (keys.length > 100) {
     delete cache[keys[0]];
@@ -38,7 +37,7 @@ function setCache(key, data) {
 
 /* ───── PRESET LOCATIONS ───── */
 
-const PRESET_LOCATIONS = {
+var PRESET_LOCATIONS = {
   moga: {
     key: "moga",
     name: "Moga",
@@ -113,59 +112,23 @@ function findNearestIndex(timeArray) {
   return idx;
 }
 
-/* ───── WEATHERAPI CODE TO WMO CODE CONVERTER ───── */
+/* ───── WEATHERAPI CODE TO WMO ───── */
 
-function weatherApiCodeToWMO(conditionCode, isDay) {
-  // WeatherAPI condition codes to WMO weather codes
+function weatherApiCodeToWMO(conditionCode) {
   var map = {
-    1000: 0,   // Sunny/Clear
-    1003: 2,   // Partly cloudy
-    1006: 3,   // Cloudy
-    1009: 3,   // Overcast
-    1030: 45,  // Mist
-    1063: 61,  // Patchy rain
-    1066: 71,  // Patchy snow
-    1069: 66,  // Patchy sleet
-    1072: 56,  // Patchy freezing drizzle
-    1087: 95,  // Thundery outbreaks
-    1114: 73,  // Blowing snow
-    1117: 75,  // Blizzard
-    1135: 45,  // Fog
-    1147: 48,  // Freezing fog
-    1150: 51,  // Patchy light drizzle
-    1153: 51,  // Light drizzle
-    1168: 56,  // Freezing drizzle
-    1171: 57,  // Heavy freezing drizzle
-    1180: 61,  // Patchy light rain
-    1183: 61,  // Light rain
-    1186: 63,  // Moderate rain at times
-    1189: 63,  // Moderate rain
-    1192: 65,  // Heavy rain at times
-    1195: 65,  // Heavy rain
-    1198: 66,  // Light freezing rain
-    1201: 67,  // Heavy freezing rain
-    1204: 66,  // Light sleet
-    1207: 67,  // Heavy sleet
-    1210: 71,  // Patchy light snow
-    1213: 71,  // Light snow
-    1216: 73,  // Patchy moderate snow
-    1219: 73,  // Moderate snow
-    1222: 75,  // Patchy heavy snow
-    1225: 75,  // Heavy snow
-    1237: 77,  // Ice pellets
-    1240: 80,  // Light rain shower
-    1243: 81,  // Moderate/heavy rain shower
-    1246: 82,  // Torrential rain shower
-    1249: 85,  // Light sleet showers
-    1252: 86,  // Heavy sleet showers
-    1255: 85,  // Light snow showers
-    1258: 86,  // Heavy snow showers
-    1261: 77,  // Light ice pellet showers
-    1264: 77,  // Heavy ice pellet showers
-    1273: 95,  // Patchy light rain with thunder
-    1276: 95,  // Moderate/heavy rain with thunder
-    1279: 95,  // Patchy light snow with thunder
-    1282: 96   // Heavy snow with thunder
+    1000: 0, 1003: 2, 1006: 3, 1009: 3, 1030: 45,
+    1063: 61, 1066: 71, 1069: 66, 1072: 56, 1087: 95,
+    1114: 73, 1117: 75, 1135: 45, 1147: 48,
+    1150: 51, 1153: 51, 1168: 56, 1171: 57,
+    1180: 61, 1183: 61, 1186: 63, 1189: 63,
+    1192: 65, 1195: 65, 1198: 66, 1201: 67,
+    1204: 66, 1207: 67,
+    1210: 71, 1213: 71, 1216: 73, 1219: 73,
+    1222: 75, 1225: 75, 1237: 77,
+    1240: 80, 1243: 81, 1246: 82,
+    1249: 85, 1252: 86, 1255: 85, 1258: 86,
+    1261: 77, 1264: 77,
+    1273: 95, 1276: 95, 1279: 95, 1282: 96
   };
   return map[conditionCode] !== undefined ? map[conditionCode] : 0;
 }
@@ -180,7 +143,6 @@ async function resolveLocation(query) {
   var lon = query.lon != null ? Number(query.lon) : null;
 
   if (lat != null && lon != null && !isNaN(lat) && !isNaN(lon)) {
-    // Use WeatherAPI for reverse geocoding
     var waSearchUrl = "https://api.weatherapi.com/v1/search.json?key=" + WEATHERAPI_KEY + "&q=" + lat + "," + lon;
     var waResults = await safelyFetch(waSearchUrl, "WeatherAPI-ReverseGeo");
 
@@ -195,14 +157,7 @@ async function resolveLocation(query) {
       };
     }
 
-    return {
-      key: "coords",
-      name: "",
-      region: "",
-      country: "",
-      lat: lat,
-      lon: lon
-    };
+    return { key: "coords", name: "", region: "", country: "", lat: lat, lon: lon };
   }
 
   if (requestedCityKey && PRESET_LOCATIONS[requestedCityKey]) {
@@ -222,6 +177,20 @@ async function resolveLocation(query) {
         country: place.country || "",
         lat: place.latitude,
         lon: place.longitude
+      };
+    }
+
+    // Fallback geocoding via WeatherAPI
+    var waGeoUrl = "https://api.weatherapi.com/v1/search.json?key=" + WEATHERAPI_KEY + "&q=" + encodeURIComponent(requestedCity);
+    var waGeoResults = await safelyFetch(waGeoUrl, "WeatherAPI-Geocoding");
+    if (waGeoResults && waGeoResults.length > 0) {
+      return {
+        key: requestedCityKey || "search",
+        name: waGeoResults[0].name || requestedCity,
+        region: waGeoResults[0].region || "",
+        country: waGeoResults[0].country || "",
+        lat: waGeoResults[0].lat,
+        lon: waGeoResults[0].lon
       };
     }
   }
@@ -248,47 +217,55 @@ async function resolveIpLocation() {
   }
 }
 
-/* ───── OPEN-METEO DATA FETCHER ───── */
+/* ───── FETCH HISTORICAL DATA FROM OPEN-METEO ───── */
 
-async function fetchOpenMeteoData(location) {
+async function fetchHistoricalData(location) {
   var now = new Date();
   var year = now.getFullYear();
   var month = String(now.getMonth() + 1).padStart(2, "0");
   var dayOfMonth = now.getDate();
-  var yesterday = year + "-" + month + "-" + String(Math.max(1, dayOfMonth - 1)).padStart(2, "0");
+
+  if (dayOfMonth <= 1) return null;
+
+  var yesterday = year + "-" + month + "-" + String(dayOfMonth - 1).padStart(2, "0");
   var monthStart = year + "-" + month + "-01";
 
-  var forecastUrl =
-    "https://api.open-meteo.com/v1/forecast?latitude=" + location.lat + "&longitude=" + location.lon +
+  var url = "https://archive-api.open-meteo.com/v1/archive?latitude=" + location.lat +
+    "&longitude=" + location.lon +
+    "&start_date=" + monthStart +
+    "&end_date=" + yesterday +
+    "&daily=weather_code,temperature_2m_max,temperature_2m_min&timezone=auto";
+
+  var data = await safelyFetch(url, "OpenMeteo-Historical");
+  return data;
+}
+
+/* ───── FETCH OPEN-METEO FORECAST ───── */
+
+async function fetchOpenMeteoForecast(location) {
+  var url = "https://api.open-meteo.com/v1/forecast?latitude=" + location.lat +
+    "&longitude=" + location.lon +
     "&current=temperature_2m,weather_code,is_day" +
     "&hourly=temperature_2m,weather_code,is_day,visibility,precipitation_probability,uv_index" +
     "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset,uv_index_max" +
     "&timezone=auto&forecast_days=7";
 
-  var airUrl =
-    "https://air-quality-api.open-meteo.com/v1/air-quality?latitude=" + location.lat + "&longitude=" + location.lon +
-    "&hourly=pm2_5&timezone=auto";
-
-  var historicalUrl = dayOfMonth > 1
-    ? "https://archive-api.open-meteo.com/v1/archive?latitude=" + location.lat + "&longitude=" + location.lon +
-      "&start_date=" + monthStart + "&end_date=" + yesterday +
-      "&daily=weather_code,temperature_2m_max,temperature_2m_min&timezone=auto"
-    : null;
-
-  var results = await Promise.all([
-    safelyFetch(forecastUrl, "OpenMeteo-Forecast"),
-    safelyFetch(airUrl, "OpenMeteo-Air"),
-    historicalUrl ? safelyFetch(historicalUrl, "OpenMeteo-Historical") : Promise.resolve(null)
-  ]);
-
-  return {
-    forecast: results[0],
-    air: results[1],
-    historical: results[2]
-  };
+  var data = await safelyFetch(url, "OpenMeteo-Forecast");
+  return data;
 }
 
-/* ───── WEATHERAPI DATA FETCHER (FALLBACK) ───── */
+/* ───── FETCH OPEN-METEO AIR QUALITY ───── */
+
+async function fetchOpenMeteoAir(location) {
+  var url = "https://air-quality-api.open-meteo.com/v1/air-quality?latitude=" + location.lat +
+    "&longitude=" + location.lon +
+    "&hourly=pm2_5&timezone=auto";
+
+  var data = await safelyFetch(url, "OpenMeteo-Air");
+  return data;
+}
+
+/* ───── FETCH WEATHERAPI DATA ───── */
 
 async function fetchWeatherApiData(location) {
   var url = "https://api.weatherapi.com/v1/forecast.json?key=" + WEATHERAPI_KEY +
@@ -299,13 +276,61 @@ async function fetchWeatherApiData(location) {
   return data;
 }
 
-/* ───── BUILD RESPONSE FROM OPEN-METEO (PRIMARY) ───── */
+/* ───── BUILD MONTHLY DATA ───── */
 
-function buildFromOpenMeteo(omData, waData, location) {
-  var omForecast = omData.forecast;
-  var omAir = omData.air;
-  var omHistorical = omData.historical;
+function buildMonthlyData(historicalData, forecastDaily, waForecastDays) {
+  var monthlyMap = {};
 
+  // 1. Historical data from Open-Meteo (past dates)
+  if (historicalData && historicalData.daily && historicalData.daily.time) {
+    var hd = historicalData.daily;
+    for (var i = 0; i < hd.time.length; i++) {
+      monthlyMap[hd.time[i]] = {
+        date: hd.time[i],
+        weather_code: hd.weather_code ? hd.weather_code[i] : 0,
+        max_temp: hd.temperature_2m_max ? hd.temperature_2m_max[i] : null,
+        min_temp: hd.temperature_2m_min ? hd.temperature_2m_min[i] : null
+      };
+    }
+  }
+
+  // 2. Open-Meteo forecast daily (today + future)
+  if (forecastDaily && forecastDaily.time) {
+    for (var j = 0; j < forecastDaily.time.length; j++) {
+      monthlyMap[forecastDaily.time[j]] = {
+        date: forecastDaily.time[j],
+        weather_code: forecastDaily.weather_code ? forecastDaily.weather_code[j] : 0,
+        max_temp: forecastDaily.temperature_2m_max ? forecastDaily.temperature_2m_max[j] : null,
+        min_temp: forecastDaily.temperature_2m_min ? forecastDaily.temperature_2m_min[j] : null
+      };
+    }
+  }
+
+  // 3. WeatherAPI forecast days (fill gaps in future that Open-Meteo doesn't cover)
+  if (waForecastDays && waForecastDays.length) {
+    for (var k = 0; k < waForecastDays.length; k++) {
+      var day = waForecastDays[k];
+      var dayData = day.day || {};
+      // Only add if not already present from Open-Meteo
+      if (!monthlyMap[day.date]) {
+        monthlyMap[day.date] = {
+          date: day.date,
+          weather_code: weatherApiCodeToWMO(dayData.condition ? dayData.condition.code : 1000),
+          max_temp: dayData.maxtemp_c || null,
+          min_temp: dayData.mintemp_c || null
+        };
+      }
+    }
+  }
+
+  return Object.values(monthlyMap).sort(function (a, b) {
+    return new Date(a.date) - new Date(b.date);
+  });
+}
+
+/* ───── BUILD RESPONSE FROM OPEN-METEO + WEATHERAPI ───── */
+
+function buildFromOpenMeteo(omForecast, omAir, historicalData, waData, location) {
   if (!omForecast) return null;
 
   var omHourly = omForecast.hourly || {};
@@ -316,7 +341,7 @@ function buildFromOpenMeteo(omData, waData, location) {
   var waCurrent = waData ? waData.current || {} : {};
   var waForecastDays = waData && waData.forecast ? waData.forecast.forecastday || [] : [];
 
-  // Build hourly data
+  // Build hourly
   var finalHourly = {
     time: omHourly.time || [],
     temperature_2m: omHourly.temperature_2m || [],
@@ -329,7 +354,7 @@ function buildFromOpenMeteo(omData, waData, location) {
     uv: omHourly.uv_index || []
   };
 
-  // Merge WeatherAPI hourly data
+  // Merge WeatherAPI hourly
   if (waForecastDays.length && omHourly.time && omHourly.time.length) {
     var waHourlyMap = {};
     for (var d = 0; d < waForecastDays.length; d++) {
@@ -368,7 +393,7 @@ function buildFromOpenMeteo(omData, waData, location) {
     }
   }
 
-  // Build daily data
+  // Build daily
   var waSunrise = waForecastDays.map(function (day) {
     return day.date + "T" + convert12hTo24h(day.astro ? day.astro.sunrise : null);
   });
@@ -387,36 +412,10 @@ function buildFromOpenMeteo(omData, waData, location) {
     uv_index_max: omDaily.uv_index_max || []
   };
 
-  // Build monthly data
-  var monthlyMap = {};
+  // Build monthly with all three sources
+  var monthly = buildMonthlyData(historicalData, omDaily, waForecastDays);
 
-  if (omHistorical && omHistorical.daily && omHistorical.daily.time) {
-    for (var mi = 0; mi < omHistorical.daily.time.length; mi++) {
-      monthlyMap[omHistorical.daily.time[mi]] = {
-        date: omHistorical.daily.time[mi],
-        weather_code: omHistorical.daily.weather_code ? omHistorical.daily.weather_code[mi] : 0,
-        max_temp: omHistorical.daily.temperature_2m_max ? omHistorical.daily.temperature_2m_max[mi] : null,
-        min_temp: omHistorical.daily.temperature_2m_min ? omHistorical.daily.temperature_2m_min[mi] : null
-      };
-    }
-  }
-
-  if (finalDaily.time.length) {
-    for (var fi = 0; fi < finalDaily.time.length; fi++) {
-      monthlyMap[finalDaily.time[fi]] = {
-        date: finalDaily.time[fi],
-        weather_code: finalDaily.weather_code[fi] || 0,
-        max_temp: finalDaily.temperature_2m_max[fi] || null,
-        min_temp: finalDaily.temperature_2m_min[fi] || null
-      };
-    }
-  }
-
-  var monthly = Object.values(monthlyMap).sort(function (a, b) {
-    return new Date(a.date) - new Date(b.date);
-  });
-
-  // Build current data
+  // Current data
   var nearestHourly = findNearestIndex(finalHourly.time);
   var nearestAir = omAir && omAir.hourly ? findNearestIndex(omAir.hourly.time) : 0;
 
@@ -453,16 +452,16 @@ function buildFromOpenMeteo(omData, waData, location) {
   };
 }
 
-/* ───── BUILD RESPONSE FROM WEATHERAPI ONLY (FALLBACK) ───── */
+/* ───── BUILD FROM WEATHERAPI ONLY ───── */
 
-function buildFromWeatherApiOnly(waData, location) {
+function buildFromWeatherApiOnly(waData, historicalData, location) {
   if (!waData || !waData.forecast) return null;
 
   var waCurrent = waData.current || {};
   var waForecastDays = waData.forecast.forecastday || [];
   var waTz = waData.location ? waData.location.tz_id : "UTC";
 
-  // Build hourly arrays from WeatherAPI
+  // Hourly
   var hourlyTime = [];
   var hourlyTemp = [];
   var hourlyCode = [];
@@ -475,11 +474,9 @@ function buildFromWeatherApiOnly(waData, location) {
     var hours = waForecastDays[d].hour || [];
     for (var h = 0; h < hours.length; h++) {
       var hour = hours[h];
-      // Convert "2024-01-15 14:00" to ISO format
-      var isoTime = hour.time.replace(" ", "T");
-      hourlyTime.push(isoTime);
+      hourlyTime.push(hour.time.replace(" ", "T"));
       hourlyTemp.push(hour.temp_c);
-      hourlyCode.push(weatherApiCodeToWMO(hour.condition ? hour.condition.code : 1000, hour.is_day));
+      hourlyCode.push(weatherApiCodeToWMO(hour.condition ? hour.condition.code : 1000));
       hourlyIsDay.push(hour.is_day);
       hourlyVisibility.push(hour.vis_km ? hour.vis_km * 1000 : null);
       hourlyHumidity.push(hour.humidity);
@@ -487,7 +484,7 @@ function buildFromWeatherApiOnly(waData, location) {
     }
   }
 
-  // Build daily arrays
+  // Daily
   var dailyTime = [];
   var dailyCode = [];
   var dailyMax = [];
@@ -503,7 +500,7 @@ function buildFromWeatherApiOnly(waData, location) {
     var astro = day.astro || {};
 
     dailyTime.push(day.date);
-    dailyCode.push(weatherApiCodeToWMO(dayData.condition ? dayData.condition.code : 1000, 1));
+    dailyCode.push(weatherApiCodeToWMO(dayData.condition ? dayData.condition.code : 1000));
     dailyMax.push(dayData.maxtemp_c);
     dailyMin.push(dayData.mintemp_c);
     dailyPrecip.push(dayData.daily_chance_of_rain || 0);
@@ -512,15 +509,15 @@ function buildFromWeatherApiOnly(waData, location) {
     dailyUv.push(dayData.uv || 0);
   }
 
-  // Build monthly from daily
-  var monthly = dailyTime.map(function (date, idx) {
-    return {
-      date: date,
-      weather_code: dailyCode[idx],
-      max_temp: dailyMax[idx],
-      min_temp: dailyMin[idx]
-    };
-  });
+  var forecastDailyObj = {
+    time: dailyTime,
+    weather_code: dailyCode,
+    temperature_2m_max: dailyMax,
+    temperature_2m_min: dailyMin
+  };
+
+  // Monthly: historical from Open-Meteo + forecast from WeatherAPI
+  var monthly = buildMonthlyData(historicalData, forecastDailyObj, waForecastDays);
 
   var nearestHourly = findNearestIndex(hourlyTime);
 
@@ -543,7 +540,7 @@ function buildFromWeatherApiOnly(waData, location) {
       wind_degree: firstAvailable(waCurrent.wind_degree),
       pressure_hpa: firstAvailable(waCurrent.pressure_mb),
       is_day: firstAvailable(waCurrent.is_day, 1),
-      weather_code: weatherApiCodeToWMO(waCurrent.condition ? waCurrent.condition.code : 1000, waCurrent.is_day || 1),
+      weather_code: weatherApiCodeToWMO(waCurrent.condition ? waCurrent.condition.code : 1000),
       condition_text: waCurrent.condition ? waCurrent.condition.text : null,
       uv: firstAvailable(waCurrent.uv),
       air_quality_pm25: firstAvailable(waCurrent.air_quality ? waCurrent.air_quality.pm2_5 : null)
@@ -582,7 +579,6 @@ app.get("/api/search", async function (req, res) {
     var q = (req.query.q || "").trim();
     if (!q) return res.json({ results: [] });
 
-    // Try Open-Meteo geocoding first
     var geoUrl = "https://geocoding-api.open-meteo.com/v1/search?name=" + encodeURIComponent(q) + "&count=8&language=en&format=json";
     var geoData = await safelyFetch(geoUrl, "OpenMeteo-Search");
 
@@ -599,7 +595,6 @@ app.get("/api/search", async function (req, res) {
       return res.json({ results: results });
     }
 
-    // Fallback to WeatherAPI search
     var waSearchUrl = "https://api.weatherapi.com/v1/search.json?key=" + WEATHERAPI_KEY + "&q=" + encodeURIComponent(q);
     var waResults = await safelyFetch(waSearchUrl, "WeatherAPI-Search");
 
@@ -625,7 +620,6 @@ app.get("/api/search", async function (req, res) {
 
 app.get("/api/weather", async function (req, res) {
   try {
-    // Resolve location
     var location;
     if (req.query.lat != null || req.query.lon != null || req.query.city) {
       location = await resolveLocation(req.query);
@@ -633,13 +627,12 @@ app.get("/api/weather", async function (req, res) {
       location = await resolveIpLocation();
     }
 
-    // Check cache first
+    // Check cache
     var cacheKey = getCacheKey(location.lat, location.lon);
     var cached = getCached(cacheKey);
     if (cached) {
       console.log("Serving from cache for:", location.name);
-      // Update location name if needed
-      if (location.name && location.name !== "Unknown location") {
+      if (location.name && location.name !== "Unknown location" && location.name !== "") {
         cached.location.name = location.name;
         cached.location.region = location.region;
         cached.location.country = location.country;
@@ -647,23 +640,35 @@ app.get("/api/weather", async function (req, res) {
       return res.json(cached);
     }
 
-    // Try Open-Meteo first (primary)
-    console.log("Trying Open-Meteo for:", location.name);
-    var omData = await fetchOpenMeteoData(location);
+    console.log("Fetching weather for:", location.name, location.lat, location.lon);
+
+    // Always try to fetch historical data from Open-Meteo (separate endpoint, separate rate limit)
+    var historicalData = await fetchHistoricalData(location);
+    if (historicalData) {
+      console.log("Historical data loaded:", (historicalData.daily && historicalData.daily.time ? historicalData.daily.time.length : 0), "days");
+    } else {
+      console.log("No historical data available");
+    }
+
+    // Try Open-Meteo forecast + air quality
+    var omForecast = await fetchOpenMeteoForecast(location);
+    var omAir = await fetchOpenMeteoAir(location);
+
+    // Always fetch WeatherAPI (for current conditions and as fallback)
     var waData = await fetchWeatherApiData(location);
 
     var result = null;
 
-    // Strategy 1: Open-Meteo worked
-    if (omData.forecast) {
+    // Strategy 1: Open-Meteo forecast works → use as primary with WeatherAPI supplement
+    if (omForecast) {
       console.log("Using Open-Meteo as primary source");
-      result = buildFromOpenMeteo(omData, waData, location);
+      result = buildFromOpenMeteo(omForecast, omAir, historicalData, waData, location);
     }
 
-    // Strategy 2: Open-Meteo failed, use WeatherAPI only
+    // Strategy 2: Open-Meteo failed → use WeatherAPI only with Open-Meteo historical
     if (!result && waData) {
-      console.log("Open-Meteo failed, using WeatherAPI as fallback");
-      result = buildFromWeatherApiOnly(waData, location);
+      console.log("Open-Meteo forecast failed, using WeatherAPI as fallback");
+      result = buildFromWeatherApiOnly(waData, historicalData, location);
     }
 
     // Strategy 3: Everything failed
@@ -672,16 +677,17 @@ app.get("/api/weather", async function (req, res) {
       return res.status(503).json({ error: "All weather APIs are unavailable. Please try again later." });
     }
 
-    // Update location name from WeatherAPI if we don't have one
-    if ((!result.location.name || result.location.name === "Unknown location") && waData && waData.location) {
+    // Fix location name
+    if ((!result.location.name || result.location.name === "Unknown location" || result.location.name === "") && waData && waData.location) {
       result.location.name = waData.location.name || result.location.name;
       result.location.region = waData.location.region || result.location.region;
       result.location.country = waData.location.country || result.location.country;
     }
 
-    // Cache the result
+    // Cache
     setCache(cacheKey, result);
 
+    console.log("Response ready. Monthly days:", result.monthly ? result.monthly.length : 0);
     res.json(result);
   } catch (error) {
     console.log("BACKEND ERROR:", error);
