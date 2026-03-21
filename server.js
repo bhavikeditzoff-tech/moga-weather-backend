@@ -317,7 +317,26 @@ app.get("/api/weather", async (req, res) => {
     res.status(500).json({ error: "Failed to fetch weather data" });
   }
 });
+app.get("/api/test-accu", async (req, res) => {
+  try {
+    const locationKey = "190065";
 
+    const url = `http://dataservice.accuweather.com/currentconditions/v1/${locationKey}?apikey=${ACCUWEATHER_API_KEY}&details=true`;
+
+    const response = await fetch(url);
+    const text = await response.text();
+
+    res.json({
+      status: response.status,
+      ok: response.ok,
+      raw: text
+    });
+  } catch (error) {
+    res.json({
+      error: error.message
+    });
+  }
+});
 app.listen(3000, () => {
   console.log("Server running on http://localhost:3000");
 });
