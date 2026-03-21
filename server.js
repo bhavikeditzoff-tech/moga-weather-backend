@@ -6,7 +6,6 @@ const cors = require("cors");
 const app = express();
 app.use(cors());
 
-const VISUAL_CROSSING_API_KEY = process.env.VISUAL_CROSSING_API_KEY;
 const WEATHERAPI_KEY = process.env.WEATHERAPI_KEY;
 
 const LOCATIONS = {
@@ -35,23 +34,8 @@ function firstAvailable(...values) {
   return null;
 }
 
-function mapVisualCrossingIconToCode(icon) {
-  const text = (icon || "").toLowerCase();
-
-  if (text.includes("clear-day") || text.includes("clear-night")) return 0;
-  if (text.includes("partly-cloudy")) return 2;
-  if (text.includes("cloudy")) return 3;
-  if (text.includes("fog")) return 45;
-  if (text.includes("rain")) return 63;
-  if (text.includes("showers")) return 80;
-  if (text.includes("snow")) return 73;
-  if (text.includes("thunder")) return 95;
-
-  return 0;
-}
-
-function convertWeatherApiSunTime(date, time12h) {
-  if (!time12h) return null;
+function convert12hTo24h(time12h) {
+  if (!time12h) return "00:00:00";
 
   const [time, modifier] = time12h.split(" ");
   let [hours, minutes] = time.split(":");
@@ -59,25 +43,28 @@ function convertWeatherApiSunTime(date, time12h) {
   if (hours === "12") hours = "00";
   if (modifier === "PM") hours = String(parseInt(hours, 10) + 12);
 
-  return `${date}T${hours.padStart(2, "0")}:${minutes}:00`;
+  return `${hours.padStart(2, "0")}:${minutes}:00`;
 }
 
-function buildFromVisualCrossing(vcData) {
-  const days = vcData.days || [];
+function mapWeatherApiConditionToCode(text) {
+  const lower = (text || "").toLowerCase();
 
-  const currentConditions = vcData.currentConditions || {};
+  if (lower.includes("sunny") || lower.includes("clear")) return 0;
+  if (lower.includes("partly cloudy")) return 2;
+  if (lower.includes("cloudy")) return 3;
+  if (lower.includes("overcast")) return 3;
+  if (lower.includes("fog") || lower.includes("mist")) return 45;
+  if (lower.includes("drizzle")) return 53;
+  if (lower.includes("rain")) return 63;
+  if (lower.includes("shower")) return 80;
+  if (lower.includes("thunder")) return 95;
+  if (lower.includes("snow")) return 73;
 
-  const daily = {
-    time: days.map(day => day.datetime),
-    weather_code: days.map(day => mapVisualCrossingIconToCode(day.icon)),
-    temperature_2m_max: days.map(day => day.tempmax ?? null),
-    temperature_2m_min: days.map(day => day.tempmin ?? null),
-    precipitation_probability_max: days.map(day => day.precipprob ?? 0),
-    sunrise: days.map(day => day.sunrise ? `${day.datetime}T${day.sunrise}` : null),
-    sunset: days.map(day => day.sunset ? `${day.datetime}T${day.sunset}` : null),
-    uv_index_max: days.map(day => day.uvindex ?? 0)
-  };
+  return 0;
+}
 
+function buildHourlyFromWeatherApi(weatherApiData) {
+  const forecastDays = weatherApiData.forecast?.forecastday || [];
   const hourly = {
     time: [],
     temperature_2m: [],
@@ -88,36 +75,35 @@ function buildFromVisualCrossing(vcData) {
     wind_kph: []
   };
 
-  days.forEach(day => {
-    const hours = day.hours || [];
+  forecastDays.forEach(day => {
+    const hours = day.hour || [];
     hours.forEach(hour => {
-      const timeString = `${day.datetime}T${hour.datetime}`;
-      const hourNumber = Number(hour.datetime.split(":")[0]);
-
-      hourly.time.push(timeString);
-      hourly.temperature_2m.push(hour.temp ?? null);
-      hourly.weather_code.push(mapVisualCrossingIconToCode(hour.icon));
-      hourly.is_day.push(hourNumber >= 6 && hourNumber < 18 ? 1 : 0);
-      hourly.visibility.push(hour.visibility != null ? hour.visibility * 1000 : null);
+      hourly.time.push(hour.time.replace(" ", "T"));
+      hourly.temperature_2m.push(hour.temp_c ?? null);
+      hourly.weather_code.push(mapWeatherApiConditionToCode(hour.condition?.text));
+      hourly.is_day.push(hour.is_day ?? null);
+      hourly.visibility.push(hour.vis_km != null ? hour.vis_km * 1000 : null);
       hourly.humidity.push(hour.humidity ?? null);
-      hourly.wind_kph.push(hour.windspeed != null ? hour.windspeed * 1.60934 : null);
+      hourly.wind_kph.push(hour.wind_kph ?? null);
     });
   });
 
-  const current = {
-    temperature_c: currentConditions.temp ?? null,
-    feelslike_c: currentConditions.feelslike ?? null,
-    humidity: currentConditions.humidity ?? null,
-    wind_kph: currentConditions.windspeed != null ? currentConditions.windspeed * 1.60934 : null,
-    wind_degree: currentConditions.winddir ?? null,
-    pressure_hpa: currentConditions.pressure ?? null,
-    is_day: currentConditions.icon?.includes("night") ? 0 : 1,
-    weather_code: mapVisualCrossingIconToCode(currentConditions.icon),
-    condition_text: currentConditions.conditions ?? null,
-    uv: currentConditions.uvindex ?? null
-  };
+  return hourly;
+}
 
-  return { current, hourly, daily };
+function buildDailyFromWeatherApi(weatherApiData) {
+  const forecastDays = weatherApiData.forecast?.forecastday || [];
+
+  return {
+    time: forecastDays.map(day => day.date),
+    weather_code: forecastDays.map(day => mapWeatherApiConditionToCode(day.day?.condition?.text)),
+    temperature_2m_max: forecastDays.map(day => day.day?.maxtemp_c),
+    temperature_2m_min: forecastDays.map(day => day.day?.mintemp_c),
+    precipitation_probability_max: forecastDays.map(day => Number(day.day?.daily_chance_of_rain ?? 0)),
+    sunrise: forecastDays.map(day => `${day.date}T${convert12hTo24h(day.astro?.sunrise)}`),
+    sunset: forecastDays.map(day => `${day.date}T${convert12hTo24h(day.astro?.sunset)}`),
+    uv_index_max: forecastDays.map(day => day.day?.uv ?? 0)
+  };
 }
 
 function mergeMonthlyData(historical, forecast) {
@@ -172,8 +158,8 @@ app.get("/api/weather", async (req, res) => {
     const yesterday = `${year}-${month}-${String(Math.max(1, now.getDate() - 1)).padStart(2, "0")}`;
     const monthStart = `${year}-${month}-01`;
 
-    const vcUrl =
-      `https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/${location.lat},${location.lon}?unitGroup=metric&include=current,hours,days&key=${VISUAL_CROSSING_API_KEY}&contentType=json`;
+    const weatherApiUrl =
+      `https://api.weatherapi.com/v1/forecast.json?key=${WEATHERAPI_KEY}&q=${location.lat},${location.lon}&days=7&aqi=yes&alerts=no`;
 
     const openMeteoAirUrl =
       `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${location.lat}&longitude=${location.lon}&hourly=pm2_5&timezone=auto`;
@@ -181,17 +167,15 @@ app.get("/api/weather", async (req, res) => {
     const openMeteoHistoricalUrl =
       `https://archive-api.open-meteo.com/v1/archive?latitude=${location.lat}&longitude=${location.lon}&start_date=${monthStart}&end_date=${yesterday}&daily=weather_code,temperature_2m_max,temperature_2m_min&timezone=auto`;
 
-    const [vcResponse, openMeteoAirResponse, openMeteoHistoricalResponse] = await Promise.all([
-      fetch(vcUrl),
-      fetch(openMeteoAirUrl),
-      fetch(openMeteoHistoricalUrl)
+    const [weatherApiData, openMeteoAir, openMeteoHistorical] = await Promise.all([
+      fetch(weatherApiUrl).then(r => r.json()),
+      fetch(openMeteoAirUrl).then(r => r.json()),
+      fetch(openMeteoHistoricalUrl).then(r => r.json())
     ]);
 
-    const vcData = await vcResponse.json();
-    const openMeteoAir = await openMeteoAirResponse.json();
-    const openMeteoHistorical = await openMeteoHistoricalResponse.json();
-
-    const parsed = buildFromVisualCrossing(vcData);
+    const hourly = buildHourlyFromWeatherApi(weatherApiData);
+    const daily = buildDailyFromWeatherApi(weatherApiData);
+    const monthly = mergeMonthlyData(openMeteoHistorical, daily);
 
     const nearestAirIndex = (() => {
       const arr = openMeteoAir.hourly?.time || [];
@@ -211,52 +195,49 @@ app.get("/api/weather", async (req, res) => {
       return idx;
     })();
 
-    const monthly = mergeMonthlyData(openMeteoHistorical, parsed.daily);
-
     res.json({
       location: {
         key: location.key,
-        name: location.name,
-        region: location.region,
-        country: location.country,
-        latitude: location.lat,
-        longitude: location.lon
+        name: firstAvailable(weatherApiData.location?.name, location.name),
+        region: firstAvailable(weatherApiData.location?.region, location.region),
+        country: firstAvailable(weatherApiData.location?.country, location.country),
+        latitude: firstAvailable(weatherApiData.location?.lat, location.lat),
+        longitude: firstAvailable(weatherApiData.location?.lon, location.lon)
       },
 
       current: {
-        temperature_c: parsed.current.temperature_c,
-        feelslike_c: parsed.current.feelslike_c,
-        humidity: parsed.current.humidity,
-        wind_kph: parsed.current.wind_kph,
-        wind_degree: parsed.current.wind_degree,
-        pressure_hpa: parsed.current.pressure_hpa,
-        is_day: parsed.current.is_day,
-        weather_code: parsed.current.weather_code,
-        condition_text: parsed.current.condition_text,
-        uv: parsed.current.uv,
-        air_quality_pm25: firstAvailable(openMeteoAir.hourly?.pm2_5?.[nearestAirIndex], null)
+        temperature_c: firstAvailable(weatherApiData.current?.temp_c, null),
+        feelslike_c: firstAvailable(weatherApiData.current?.feelslike_c, null),
+        humidity: firstAvailable(weatherApiData.current?.humidity, null),
+        wind_kph: firstAvailable(weatherApiData.current?.wind_kph, null),
+        wind_degree: firstAvailable(weatherApiData.current?.wind_degree, null),
+        pressure_hpa: firstAvailable(weatherApiData.current?.pressure_mb, null),
+        is_day: firstAvailable(weatherApiData.current?.is_day, 1),
+        weather_code: firstAvailable(mapWeatherApiConditionToCode(weatherApiData.current?.condition?.text), 0),
+        condition_text: firstAvailable(weatherApiData.current?.condition?.text, null),
+        uv: firstAvailable(weatherApiData.current?.uv, daily.uv_index_max?.[0]),
+        air_quality_pm25: firstAvailable(openMeteoAir.hourly?.pm2_5?.[nearestAirIndex], weatherApiData.current?.air_quality?.pm2_5)
       },
 
-      daily: parsed.daily,
-      hourly: parsed.hourly,
+      daily,
+      hourly,
       monthly,
 
       debug: {
-        vcDays: parsed.daily.time.length,
-        vcHours: parsed.hourly.time.length,
-        vcCurrentLoaded: parsed.current.temperature_c !== null,
+        weatherApiHourlyCount: hourly.time.length,
+        weatherApiDailyCount: daily.time.length,
         monthlyHistoricalCount: openMeteoHistorical.daily?.time?.length || 0
       },
 
       source: {
-        primary_current_temp: "Visual Crossing",
-        primary_current_condition: "Visual Crossing",
-        primary_hourly: "Visual Crossing",
-        primary_daily_temp: "Visual Crossing",
-        primary_daily_condition: "Visual Crossing",
-        primary_uv: "Visual Crossing",
-        monthly_history: "Open-Meteo Archive + Visual Crossing Merge",
-        air_quality: "Open-Meteo Air"
+        primary_current_temp: "WeatherAPI",
+        primary_current_condition: "WeatherAPI",
+        primary_hourly: "WeatherAPI",
+        primary_daily_temp: "WeatherAPI",
+        primary_daily_condition: "WeatherAPI",
+        primary_uv: "WeatherAPI",
+        monthly_history: "Open-Meteo Archive + WeatherAPI Merge",
+        air_quality: "Open-Meteo Air + WeatherAPI"
       }
     });
   } catch (error) {
