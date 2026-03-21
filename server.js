@@ -8,7 +8,6 @@ app.use(cors());
 
 const TOMORROW_API_KEY = process.env.TOMORROW_API_KEY;
 const WEATHERAPI_KEY = process.env.WEATHERAPI_KEY;
-const WEATHERBIT_API_KEY = process.env.WEATHERBIT_API_KEY;
 
 const LOCATIONS = {
   moga: {
@@ -74,20 +73,6 @@ function mapTomorrowCodeToWeatherCode(code) {
   return map[code] ?? 0;
 }
 
-function mapWeatherbitCodeToWeatherCode(code) {
-  if (code >= 200 && code < 300) return 95;
-  if (code >= 300 && code < 400) return 53;
-  if (code >= 500 && code < 520) return 63;
-  if (code >= 520 && code < 600) return 80;
-  if (code >= 600 && code < 700) return 73;
-  if (code >= 700 && code < 800) return 45;
-  if (code === 800) return 0;
-  if (code === 801) return 1;
-  if (code === 802) return 2;
-  if (code >= 803) return 3;
-  return 0;
-}
-
 function buildHourlyFromTomorrow(timelines) {
   return {
     time: timelines.map(item => item.time),
@@ -112,38 +97,6 @@ function buildDailyFromTomorrow(timelines) {
     precipitation_probability_max: timelines.map(item => item.values?.precipitationProbabilityMax ?? 0),
     uv_index_max: timelines.map(item => item.values?.uvIndexMax ?? 0),
     weather_code: timelines.map(item => mapTomorrowCodeToWeatherCode(item.values?.weatherCodeMax ?? item.values?.weatherCode))
-  };
-}
-
-function buildCurrentFromWeatherbit(data) {
-  if (!data?.data?.length) return null;
-  const d = data.data[0];
-  return {
-    temperature_c: d.temp ?? null,
-    feelslike_c: d.app_temp ?? null,
-    humidity: d.rh ?? null,
-    wind_kph: d.wind_spd != null ? d.wind_spd * 3.6 : null,
-    wind_degree: d.wind_dir ?? null,
-    pressure_hpa: d.pres ?? null,
-    uv: d.uv ?? null,
-    visibility_km: d.vis ?? null,
-    aqi: d.aqi ?? null,
-    weather_code: d.weather?.code != null ? mapWeatherbitCodeToWeatherCode(d.weather.code) : null,
-    condition_text: d.weather?.description ?? null,
-    sunrise: d.sunrise ?? null,
-    sunset: d.sunset ?? null
-  };
-}
-
-function buildDailyFromWeatherbit(data) {
-  if (!data?.data?.length) return null;
-  return {
-    time: data.data.map(d => d.datetime),
-    temperature_2m_max: data.data.map(d => d.max_temp ?? null),
-    temperature_2m_min: data.data.map(d => d.min_temp ?? null),
-    precipitation_probability_max: data.data.map(d => d.pop ?? 0),
-    uv_index_max: data.data.map(d => d.uv ?? 0),
-    weather_code: data.data.map(d => d.weather?.code != null ? mapWeatherbitCodeToWeatherCode(d.weather.code) : 0)
   };
 }
 
@@ -214,20 +167,13 @@ app.get("/api/weather", async (req, res) => {
     const tomorrowUrl =
       `https://api.tomorrow.io/v4/weather/forecast?location=${location.lat},${location.lon}&apikey=${TOMORROW_API_KEY}&timesteps=1h,1d&units=metric`;
 
-    // Open-Meteo — FALLBACK #1 for hourly/daily + always for weather_code & is_day
+    // Open-Meteo — FALLBACK for hourly/daily + always used for weather_code & is_day
     const openMeteoForecastUrl =
       `https://api.open-meteo.com/v1/forecast?latitude=${location.lat}&longitude=${location.lon}` +
       `&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,is_day,wind_speed_10m,wind_direction_10m,surface_pressure` +
       `&hourly=temperature_2m,relative_humidity_2m,weather_code,is_day,visibility,wind_speed_10m,precipitation_probability,uv_index` +
       `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset,uv_index_max` +
       `&timezone=auto&forecast_days=7`;
-
-    // Weatherbit — FALLBACK #2 for current + daily
-    const weatherbitCurrentUrl =
-      `https://api.weatherbit.io/v2.0/current?lat=${location.lat}&lon=${location.lon}&key=${WEATHERBIT_API_KEY}&units=M`;
-
-    const weatherbitForecastUrl =
-      `https://api.weatherbit.io/v2.0/forecast/daily?lat=${location.lat}&lon=${location.lon}&key=${WEATHERBIT_API_KEY}&units=M&days=7`;
 
     // WeatherAPI — supplementary
     const weatherApiUrl =
@@ -246,34 +192,29 @@ app.get("/api/weather", async (req, res) => {
     const [
       tomorrowData,
       openMeteoForecast,
-      weatherbitCurrentData,
-      weatherbitForecastData,
       weatherApiData,
       openMeteoAir,
       openMeteoHistorical
     ] = await Promise.all([
       safelyFetch(tomorrowUrl, "Tomorrow.io"),
       safelyFetch(openMeteoForecastUrl, "OpenMeteo-Forecast"),
-      safelyFetch(weatherbitCurrentUrl, "Weatherbit-Current"),
-      safelyFetch(weatherbitForecastUrl, "Weatherbit-Forecast"),
       safelyFetch(weatherApiUrl, "WeatherAPI"),
       safelyFetch(openMeteoAirUrl, "OpenMeteo-Air"),
       openMeteoHistoricalUrl ? safelyFetch(openMeteoHistoricalUrl, "OpenMeteo-Historical") : Promise.resolve(null)
     ]);
 
-    // ── Parse Tomorrow.io ──
+    // Log what Tomorrow.io actually returned
     const tomorrowHourlyRaw = tomorrowData?.timelines?.hourly || [];
     const tomorrowDailyRaw = tomorrowData?.timelines?.daily || [];
     console.log(`Tomorrow.io: ${tomorrowHourlyRaw.length} hourly, ${tomorrowDailyRaw.length} daily`);
 
     if (tomorrowHourlyRaw.length === 0 && tomorrowData) {
       console.log("Tomorrow.io response keys:", JSON.stringify(Object.keys(tomorrowData)));
+      if (tomorrowData.timelines) {
+        console.log("Tomorrow.io timelines keys:", JSON.stringify(Object.keys(tomorrowData.timelines)));
+      }
       if (tomorrowData.code || tomorrowData.message || tomorrowData.type) {
-        console.log("Tomorrow.io error:", JSON.stringify({
-          code: tomorrowData.code,
-          message: tomorrowData.message,
-          type: tomorrowData.type
-        }));
+        console.log("Tomorrow.io error:", JSON.stringify({ code: tomorrowData.code, message: tomorrowData.message, type: tomorrowData.type }));
       }
     }
 
@@ -281,35 +222,26 @@ app.get("/api/weather", async (req, res) => {
     const tomorrowHourly = tomorrowWorked ? buildHourlyFromTomorrow(tomorrowHourlyRaw) : null;
     const tomorrowDaily = tomorrowDailyRaw.length > 0 ? buildDailyFromTomorrow(tomorrowDailyRaw) : null;
 
-    // ── Parse Open-Meteo ──
+    // Open-Meteo parsed
     const omHourly = openMeteoForecast?.hourly || {};
     const omDaily = openMeteoForecast?.daily || {};
     const omCurrent = openMeteoForecast?.current || {};
 
-    // ── Parse Weatherbit ──
-    const wbCurrent = buildCurrentFromWeatherbit(weatherbitCurrentData);
-    const wbDaily = buildDailyFromWeatherbit(weatherbitForecastData);
-
-    console.log(`Weatherbit: current=${wbCurrent ? "yes" : "no"}, daily=${wbDaily?.time?.length || 0} days`);
-
-    // ── Parse WeatherAPI ──
+    // WeatherAPI parsed
     const weatherApiForecastDays = weatherApiData?.forecast?.forecastday || [];
     const waSunrise = weatherApiForecastDays.map(day => `${day.date}T${convert12hTo24h(day.astro?.sunrise)}`);
     const waSunset = weatherApiForecastDays.map(day => `${day.date}T${convert12hTo24h(day.astro?.sunset)}`);
     const waUvMax = weatherApiForecastDays.map(day => day.day?.uv ?? 0);
     const waCurrent = weatherApiData?.current || {};
 
-    // ══════════════════════════════════════════
-    //  BUILD FINAL HOURLY
-    //  Priority: Tomorrow.io → Open-Meteo
-    //  (Weatherbit free tier has no hourly)
-    // ══════════════════════════════════════════
+    // ── Build final hourly ──
     let finalHourly;
     let hourlySource;
 
     if (tomorrowWorked && tomorrowHourly) {
       hourlySource = "Tomorrow.io";
 
+      // Use Open-Meteo weather_code and is_day (more accurate conditions)
       const omWeatherCodes = omHourly.weather_code || [];
       const omIsDayArr = omHourly.is_day || [];
 
@@ -351,10 +283,7 @@ app.get("/api/weather", async (req, res) => {
       };
     }
 
-    // ══════════════════════════════════════════
-    //  BUILD FINAL DAILY
-    //  Priority: Tomorrow.io → Open-Meteo → Weatherbit
-    // ══════════════════════════════════════════
+    // ── Build final daily ──
     let finalDaily;
     let dailySource;
 
@@ -391,22 +320,8 @@ app.get("/api/weather", async (req, res) => {
         sunset: omDaily.sunset?.length ? omDaily.sunset : waSunset,
         uv_index_max: omDaily.uv_index_max?.length ? omDaily.uv_index_max : waUvMax
       };
-    } else if (wbDaily && wbDaily.time?.length) {
-      dailySource = "Weatherbit (fallback)";
-      console.log("Using Weatherbit as daily fallback");
-
-      finalDaily = {
-        time: wbDaily.time,
-        weather_code: wbDaily.weather_code,
-        temperature_2m_max: wbDaily.temperature_2m_max,
-        temperature_2m_min: wbDaily.temperature_2m_min,
-        precipitation_probability_max: wbDaily.precipitation_probability_max,
-        sunrise: waSunrise.length ? waSunrise : [],
-        sunset: waSunset.length ? waSunset : [],
-        uv_index_max: wbDaily.uv_index_max
-      };
     } else {
-      dailySource = "none";
+      dailySource = "WeatherAPI (minimal)";
       finalDaily = {
         time: [], weather_code: [], temperature_2m_max: [], temperature_2m_min: [],
         precipitation_probability_max: [], sunrise: waSunrise, sunset: waSunset, uv_index_max: waUvMax
@@ -421,54 +336,44 @@ app.get("/api/weather", async (req, res) => {
       temperature_2m_min: finalDaily.temperature_2m_min
     });
 
-    // ══════════════════════════════════════════
-    //  CURRENT CONDITIONS
-    //  Priority: Tomorrow.io → Weatherbit → Open-Meteo → WeatherAPI
-    // ══════════════════════════════════════════
+    // ── Current conditions ──
     const nearestHourlyIndex = findNearestIndex(finalHourly.time);
     const nearestAirIndex = findNearestIndex(openMeteoAir?.hourly?.time);
 
-    const tNearestIdx = tomorrowWorked ? findNearestIndex(tomorrowHourly.time) : -1;
-
+    // For current values, prefer Tomorrow.io hourly if it worked, then Open-Meteo current, then WeatherAPI
     const currentTemperature = firstAvailable(
-      tomorrowWorked ? tomorrowHourly.temperature_2m?.[tNearestIdx] : null,
-      wbCurrent?.temperature_c,
+      tomorrowWorked ? tomorrowHourly.temperature_2m?.[findNearestIndex(tomorrowHourly.time)] : null,
       omCurrent.temperature_2m,
       finalHourly.temperature_2m?.[nearestHourlyIndex],
       waCurrent.temp_c
     );
 
     const currentFeelsLike = firstAvailable(
-      tomorrowWorked ? tomorrowHourly.feels_like?.[tNearestIdx] : null,
-      wbCurrent?.feelslike_c,
+      tomorrowWorked ? tomorrowHourly.feels_like?.[findNearestIndex(tomorrowHourly.time)] : null,
       omCurrent.apparent_temperature,
       waCurrent.feelslike_c
     );
 
     const currentHumidity = firstAvailable(
       finalHourly.humidity?.[nearestHourlyIndex],
-      wbCurrent?.humidity,
       omCurrent.relative_humidity_2m,
       waCurrent.humidity
     );
 
     const currentWindKph = firstAvailable(
       finalHourly.wind_kph?.[nearestHourlyIndex],
-      wbCurrent?.wind_kph,
       omCurrent.wind_speed_10m,
       waCurrent.wind_kph
     );
 
     const currentWindDeg = firstAvailable(
-      tomorrowWorked ? tomorrowHourly.wind_direction?.[tNearestIdx] : null,
-      wbCurrent?.wind_degree,
+      tomorrowWorked ? tomorrowHourly.wind_direction?.[findNearestIndex(tomorrowHourly.time)] : null,
       omCurrent.wind_direction_10m,
       waCurrent.wind_degree
     );
 
     const currentPressure = firstAvailable(
-      tomorrowWorked ? tomorrowHourly.pressure?.[tNearestIdx] : null,
-      wbCurrent?.pressure_hpa,
+      tomorrowWorked ? tomorrowHourly.pressure?.[findNearestIndex(tomorrowHourly.time)] : null,
       omCurrent.surface_pressure,
       waCurrent.pressure_mb
     );
@@ -482,13 +387,11 @@ app.get("/api/weather", async (req, res) => {
     const currentWeatherCode = firstAvailable(
       omCurrent.weather_code,
       finalHourly.weather_code?.[nearestHourlyIndex],
-      wbCurrent?.weather_code,
       0
     );
 
     const currentUv = firstAvailable(
       finalHourly.uv?.[nearestHourlyIndex],
-      wbCurrent?.uv,
       waCurrent.uv
     );
 
@@ -496,18 +399,6 @@ app.get("/api/weather", async (req, res) => {
       openMeteoAir?.hourly?.pm2_5?.[nearestAirIndex],
       waCurrent.air_quality?.pm2_5
     );
-
-    const currentVisibility = firstAvailable(
-      finalHourly.visibility?.[nearestHourlyIndex],
-      wbCurrent?.visibility_km != null ? wbCurrent.visibility_km * 1000 : null
-    );
-
-    // ── Determine which source provided current temp ──
-    let currentTempSource = "none";
-    if (tomorrowWorked && tomorrowHourly.temperature_2m?.[tNearestIdx] != null) currentTempSource = "Tomorrow.io";
-    else if (wbCurrent?.temperature_c != null) currentTempSource = "Weatherbit";
-    else if (omCurrent.temperature_2m != null) currentTempSource = "Open-Meteo";
-    else if (waCurrent.temp_c != null) currentTempSource = "WeatherAPI";
 
     res.json({
       location: {
@@ -528,7 +419,7 @@ app.get("/api/weather", async (req, res) => {
         pressure_hpa: currentPressure,
         is_day: currentIsDay,
         weather_code: currentWeatherCode,
-        condition_text: firstAvailable(waCurrent.condition?.text, wbCurrent?.condition_text, null),
+        condition_text: firstAvailable(waCurrent.condition?.text, null),
         uv: currentUv,
         air_quality_pm25: currentPm25
       },
@@ -542,27 +433,20 @@ app.get("/api/weather", async (req, res) => {
         tomorrowDailyCount: tomorrowDailyRaw.length,
         openMeteoHourlyCount: omHourly.time?.length || 0,
         openMeteoDailyCount: omDaily.time?.length || 0,
-        weatherbitCurrentOk: wbCurrent != null,
-        weatherbitDailyCount: wbDaily?.time?.length || 0,
         weatherApiDaysCount: weatherApiForecastDays.length,
         monthlyCount: monthly.length,
         hourlySource,
         dailySource,
-        currentTempSource,
-        tomorrowError: (!tomorrowWorked && tomorrowData)
-          ? (tomorrowData.message || tomorrowData.type || "empty timelines")
-          : null
+        tomorrowError: (!tomorrowWorked && tomorrowData) ? (tomorrowData.message || tomorrowData.type || "empty timelines") : null
       },
 
       source: {
         hourly: hourlySource,
         daily: dailySource,
-        current_temp: currentTempSource,
-        conditions: "Open-Meteo (primary) → Weatherbit (fallback)",
-        sunrise_sunset: "Open-Meteo → WeatherAPI",
-        air_quality: "Open-Meteo Air → WeatherAPI",
-        monthly: "Open-Meteo Archive + forecast merge",
-        priority_chain: "Tomorrow.io → Weatherbit → Open-Meteo → WeatherAPI"
+        conditions: "Open-Meteo",
+        current: "Tomorrow.io > Open-Meteo > WeatherAPI",
+        air_quality: "Open-Meteo Air + WeatherAPI",
+        monthly: "Open-Meteo Archive + forecast merge"
       }
     });
   } catch (error) {
