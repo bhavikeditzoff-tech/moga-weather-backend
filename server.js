@@ -6,7 +6,6 @@ const app = express();
 app.use(cors());
 
 const WEATHERAPI_KEY = process.env.WEATHERAPI_KEY;
-const TOMORROW_KEY = process.env.TOMORROW_API_KEY;
 const WEATHERBIT_KEY = process.env.WEATHERBIT_API_KEY;
 const VISUALCROSSING_KEY = process.env.VISUAL_CROSSING_API_KEY;
 const PIRATE_KEY = process.env.PIRATE_WEATHER_KEY;
@@ -25,14 +24,19 @@ function makeCK(lat, lon) {
 function getC(key) {
   var e = cache[key];
   if (!e) return null;
-  if (Date.now() - e.time > CACHE_DURATION) { delete cache[key]; return null; }
+  if (Date.now() - e.time > CACHE_DURATION) {
+    delete cache[key];
+    return null;
+  }
   return e.data;
 }
 
 function putC(key, data) {
   var keys = Object.keys(cache);
   if (keys.length > 300) {
-    var sorted = keys.sort(function (a, b) { return (cache[a].time || 0) - (cache[b].time || 0); });
+    var sorted = keys.sort(function (a, b) {
+      return (cache[a].time || 0) - (cache[b].time || 0);
+    });
     for (var i = 0; i < 100; i++) delete cache[sorted[i]];
   }
   cache[key] = { data: data, time: Date.now() };
@@ -73,14 +77,17 @@ function c12to24(t) {
   return h.padStart(2, "0") + ":" + m + ":00";
 }
 
-// Convert epoch to local time string in given timezone
 function epochToLocalISO(epochSec, tz) {
   var d = new Date(epochSec * 1000);
   try {
     var parts = new Intl.DateTimeFormat("en-CA", {
       timeZone: tz,
-      year: "numeric", month: "2-digit", day: "2-digit",
-      hour: "2-digit", minute: "2-digit", hourCycle: "h23"
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23"
     }).formatToParts(d);
 
     var yy = "", mm = "", dd = "", hh = "", mi = "";
@@ -101,7 +108,9 @@ function getLocalHour(epochSec, tz) {
   try {
     var d = new Date(epochSec * 1000);
     var parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: tz, hour: "numeric", hourCycle: "h23"
+      timeZone: tz,
+      hour: "numeric",
+      hourCycle: "h23"
     }).formatToParts(d);
     for (var i = 0; i < parts.length; i++) {
       if (parts[i].type === "hour") return parseInt(parts[i].value);
@@ -275,13 +284,8 @@ function buildHourlyFromWA(waData, tz) {
     var hours = days[d].hour || [];
     for (var h = 0; h < hours.length; h++) {
       var hr = hours[h];
-      var epoch = hr.time_epoch;
-
-      // Use epoch for correct filtering (timezone independent)
-      if (epoch >= nowEpoch - 3600) {
-        // Convert epoch to local time string for frontend display
-        var localTimeStr = epochToLocalISO(epoch, tz);
-
+      if (hr.time_epoch && hr.time_epoch >= nowEpoch - 3600) {
+        var localTimeStr = hr.time.replace(" ", "T");
         time.push(localTimeStr);
         temp.push(hr.temp_c);
         code.push(waCodeToWMO(hr.condition ? hr.condition.code : 1000));
@@ -299,13 +303,9 @@ function buildHourlyFromWA(waData, tz) {
 function extendHourlyWithPirate(hourly, prData, tz) {
   if (!prData || !prData.hourly || !prData.hourly.data) return hourly;
 
-  // Build set of existing hour keys (epoch rounded to hour)
   var existingKeys = {};
   for (var i = 0; i < hourly.time.length; i++) {
-    // Parse local time string back, get approximate hour key
-    var dt = new Date(hourly.time[i]);
-    var key = Math.round(dt.getTime() / 3600000);
-    existingKeys[key] = true;
+    existingKeys[hourly.time[i].substring(0, 13)] = true;
   }
 
   var ph = prData.hourly.data;
@@ -315,11 +315,11 @@ function extendHourlyWithPirate(hourly, prData, tz) {
     var pEpoch = ph[j].time || 0;
     if (pEpoch < nowEpoch - 3600) continue;
 
-    var hourKey = Math.round((pEpoch * 1000) / 3600000);
+    var localStr = epochToLocalISO(pEpoch, tz);
+    var hourKey = localStr.substring(0, 13);
     if (existingKeys[hourKey]) continue;
 
-    var localStr = epochToLocalISO(pEpoch, tz);
-    var localHour = getLocalHour(pEpoch, tz);
+    var localHour = parseInt(localStr.substring(11, 13));
 
     hourly.time.push(localStr);
     hourly.temperature_2m.push(ph[j].temperature);
@@ -328,7 +328,6 @@ function extendHourlyWithPirate(hourly, prData, tz) {
     existingKeys[hourKey] = true;
   }
 
-  // Sort by time string
   var combined = [];
   for (var k = 0; k < hourly.time.length; k++) {
     combined.push({
@@ -338,9 +337,7 @@ function extendHourlyWithPirate(hourly, prData, tz) {
       isDay: hourly.is_day[k]
     });
   }
-  combined.sort(function (a, b) {
-    return a.time.localeCompare(b.time);
-  });
+  combined.sort(function (a, b) { return a.time.localeCompare(b.time); });
 
   hourly.time = combined.map(function (c) { return c.time; });
   hourly.temperature_2m = combined.map(function (c) { return c.temp; });
@@ -360,7 +357,6 @@ function buildTimePeriods(waData, prData, tz) {
     { name: "Overnight", startH: 21, endH: 30 }
   ];
 
-  // Collect all hourly data with precip from WeatherAPI
   var allHours = [];
   if (waData && waData.forecast && waData.forecast.forecastday) {
     var waDays = waData.forecast.forecastday;
@@ -368,12 +364,10 @@ function buildTimePeriods(waData, prData, tz) {
       var hours = waDays[d].hour || [];
       for (var h = 0; h < hours.length; h++) {
         var hr = hours[h];
-        var localHour = getLocalHour(hr.time_epoch, tz);
-        var localDate = epochToLocalISO(hr.time_epoch, tz).substring(0, 10);
         allHours.push({
           epoch: hr.time_epoch,
-          localHour: localHour,
-          localDate: localDate,
+          localHour: getLocalHour(hr.time_epoch, tz),
+          localDate: epochToLocalISO(hr.time_epoch, tz).substring(0, 10),
           temp: hr.temp_c,
           code: waCodeToWMO(hr.condition ? hr.condition.code : 1000),
           precip: hr.chance_of_rain || hr.chance_of_snow || 0
@@ -382,25 +376,19 @@ function buildTimePeriods(waData, prData, tz) {
     }
   }
 
-  // Also add Pirate Weather precip
   if (prData && prData.hourly && prData.hourly.data) {
     var ph = prData.hourly.data;
     for (var p = 0; p < ph.length; p++) {
       var pEpoch = ph[p].time || 0;
-      var pLocalHour = getLocalHour(pEpoch, tz);
-      var pLocalDate = epochToLocalISO(pEpoch, tz).substring(0, 10);
-
-      // Check if already exists
       var exists = false;
       for (var e = 0; e < allHours.length; e++) {
         if (Math.abs(allHours[e].epoch - pEpoch) < 1800) { exists = true; break; }
       }
-
       if (!exists) {
         allHours.push({
           epoch: pEpoch,
-          localHour: pLocalHour,
-          localDate: pLocalDate,
+          localHour: getLocalHour(pEpoch, tz),
+          localDate: epochToLocalISO(pEpoch, tz).substring(0, 10),
           temp: ph[p].temperature,
           code: pirateToWMO(ph[p].icon),
           precip: ph[p].precipProbability != null ? Math.round(ph[p].precipProbability * 100) : null
@@ -409,55 +397,46 @@ function buildTimePeriods(waData, prData, tz) {
     }
   }
 
-  // Get today's date in local timezone
   var nowEpoch = Math.floor(Date.now() / 1000);
   var todayLocal = epochToLocalISO(nowEpoch, tz).substring(0, 10);
   var nowLocalHour = getLocalHour(nowEpoch, tz);
+  var tmrwDate = epochToLocalISO(nowEpoch + 86400, tz).substring(0, 10);
 
   var result = [];
 
   for (var pi = 0; pi < periods.length; pi++) {
     var per = periods[pi];
-    var targetDate = todayLocal;
-    var startH = per.startH;
-    var endH = per.endH > 24 ? per.endH - 24 : per.endH;
-    var nextDay = per.endH > 24;
-
-    // If period already passed today, look at tomorrow
-    if (endH <= nowLocalHour && !nextDay) {
-      // Shift to tomorrow
-      var tmrw = new Date(Date.now() + 86400000);
-      targetDate = epochToLocalISO(Math.floor(tmrw.getTime() / 1000), tz).substring(0, 10);
-    }
-
     var temps = [], codes = {}, precips = [];
 
     for (var ai = 0; ai < allHours.length; ai++) {
       var ah = allHours[ai];
+      var inPeriod = false;
 
-      if (nextDay) {
-        // Overnight spans two days: 21-24 today + 0-6 tomorrow
-        var isTonight = (ah.localDate === todayLocal && ah.localHour >= 21);
-        var tmrwDate = epochToLocalISO(Math.floor((Date.now() + 86400000) / 1000), tz).substring(0, 10);
-        var isTmrwMorning = (ah.localDate === tmrwDate && ah.localHour < 6);
-        if (!isTonight && !isTmrwMorning) continue;
+      if (per.name === "Overnight") {
+        if ((ah.localDate === todayLocal && ah.localHour >= 21) || (ah.localDate === tmrwDate && ah.localHour < 6)) {
+          inPeriod = true;
+        }
       } else {
-        if (ah.localDate !== targetDate) continue;
-        if (ah.localHour < startH || ah.localHour >= endH) continue;
+        var targetDate = todayLocal;
+        if (per.endH <= nowLocalHour) targetDate = tmrwDate;
+        if (ah.localDate === targetDate && ah.localHour >= per.startH && ah.localHour < per.endH) {
+          inPeriod = true;
+        }
       }
 
-      if (ah.temp != null) temps.push(ah.temp);
-      if (ah.code != null) codes[ah.code] = (codes[ah.code] || 0) + 1;
-      if (ah.precip != null) precips.push(ah.precip);
+      if (inPeriod) {
+        if (ah.temp != null) temps.push(ah.temp);
+        if (ah.code != null) codes[ah.code] = (codes[ah.code] || 0) + 1;
+        if (ah.precip != null) precips.push(ah.precip);
+      }
     }
 
     var avgTemp = temps.length ? Math.round(temps.reduce(function (a, b) { return a + b; }, 0) / temps.length) : null;
     var avgPrecip = precips.length ? Math.round(precips.reduce(function (a, b) { return a + b; }, 0) / precips.length) : null;
-
     var dominantCode = 0, maxCount = 0;
-    var ck = Object.keys(codes);
-    for (var ci = 0; ci < ck.length; ci++) {
-      if (codes[ck[ci]] > maxCount) { maxCount = codes[ck[ci]]; dominantCode = Number(ck[ci]); }
+    var keys = Object.keys(codes);
+    for (var ci = 0; ci < keys.length; ci++) {
+      if (codes[keys[ci]] > maxCount) { maxCount = codes[keys[ci]]; dominantCode = Number(keys[ci]); }
     }
 
     result.push({
@@ -474,9 +453,10 @@ function buildTimePeriods(waData, prData, tz) {
 
 /* ───── BUILD DAILY (15 DAYS) ───── */
 /*
-  Days 1-3:  WeatherAPI (conditions) + Open-Meteo (temperatures), fallback WA temps
-  Days 4-7:  Meteosource (conditions) + Open-Meteo (temperatures), fallback Weatherbit
-  Days 8-15: Visual Crossing (conditions + temperatures)
+  Days 1-3:  Conditions -> WeatherAPI, Temps -> Open-Meteo
+  Days 4-7:  Conditions -> Meteosource, Temps -> Open-Meteo
+  Days 8-15: Conditions -> Visual Crossing, Temps -> Open-Meteo
+  Fallback temp source if OM missing: Weatherbit (days 1-7), VC (days 8-15)
 */
 
 function buildDaily(waData, wbData, msData, vcData, omData) {
@@ -486,7 +466,7 @@ function buildDaily(waData, wbData, msData, vcData, omData) {
 
   console.log("--- Building Daily ---");
 
-  // Step 1: WeatherAPI days 1-3 (conditions + sunrise/sunset + fallback temps)
+  // Step 1: WeatherAPI days 1-3 conditions + sunrise/sunset
   if (waData && waData.forecast && waData.forecast.forecastday) {
     var waDays = waData.forecast.forecastday;
     console.log("WA days:", waDays.length);
@@ -508,85 +488,7 @@ function buildDaily(waData, wbData, msData, vcData, omData) {
     }
   }
 
-  // Step 2: Open-Meteo temperatures for days 1-7 (override WA temps)
-  if (omData && omData.daily && omData.daily.time) {
-    console.log("OM days:", omData.daily.time.length);
-    var omd = omData.daily;
-    for (var o = 0; o < omd.time.length && o < 7; o++) {
-      var omDate = omd.time[o];
-      var omMax = omd.temperature_2m_max ? omd.temperature_2m_max[o] : null;
-      var omMin = omd.temperature_2m_min ? omd.temperature_2m_min[o] : null;
-
-      if (days[omDate]) {
-        // Override temps with Open-Meteo (more accurate)
-        if (omMax != null) days[omDate].max_temp = omMax;
-        if (omMin != null) days[omDate].min_temp = omMin;
-        console.log("OM override day " + omDate + ": max=" + omMax + " min=" + omMin);
-      } else {
-        // New day (days 4-7 not yet in WA)
-        days[omDate] = {
-          date: omDate,
-          weather_code: 0,
-          max_temp: omMax,
-          min_temp: omMin,
-          precip_chance: 0,
-          sunrise: null,
-          sunset: null,
-          uv: null,
-          src: "om"
-        };
-      }
-    }
-  }
-
-  // Step 3: If Open-Meteo failed, use Weatherbit for days 1-7 temps
-  if (!omData || !omData.daily) {
-    console.log("OM unavailable, trying Weatherbit for temps");
-    if (wbData && wbData.data) {
-      console.log("WB days:", wbData.data.length);
-      for (var j = 0; j < wbData.data.length; j++) {
-        var wb = wbData.data[j];
-        var wbDate = wb.datetime || wb.valid_date;
-        if (!wbDate) continue;
-
-        var wbMax = first(wb.high_temp, wb.max_temp);
-        var wbMin = first(wb.low_temp, wb.min_temp);
-        var wbUv = first(wb.uv, wb.max_uv);
-
-        if (days[wbDate]) {
-          // Only override if OM didn't set temps
-          if (days[wbDate].max_temp == null && wbMax != null) days[wbDate].max_temp = wbMax;
-          if (days[wbDate].min_temp == null && wbMin != null) days[wbDate].min_temp = wbMin;
-          if (days[wbDate].uv == null && wbUv != null) days[wbDate].uv = wbUv;
-        } else {
-          days[wbDate] = {
-            date: wbDate,
-            weather_code: wb.weather ? wbCodeToWMO(wb.weather.code) : 0,
-            max_temp: wbMax,
-            min_temp: wbMin,
-            precip_chance: wb.pop || 0,
-            sunrise: null,
-            sunset: null,
-            uv: wbUv,
-            src: "wb"
-          };
-        }
-      }
-    }
-  }
-
-  // Step 4: Weatherbit UV for all available days (regardless of OM status)
-  if (wbData && wbData.data) {
-    for (var u = 0; u < wbData.data.length; u++) {
-      var wbu = wbData.data[u];
-      var wbuDate = wbu.datetime || wbu.valid_date;
-      if (wbuDate && days[wbuDate] && days[wbuDate].uv == null) {
-        days[wbuDate].uv = first(wbu.uv, wbu.max_uv);
-      }
-    }
-  }
-
-  // Step 5: Meteosource conditions for days 4-7 (override for non-WA days)
+  // Step 2: Meteosource conditions for days 4-7
   if (msData && msData.daily && msData.daily.data) {
     var msDays = msData.daily.data;
     console.log("MS days:", msDays.length);
@@ -601,33 +503,26 @@ function buildDaily(waData, wbData, msData, vcData, omData) {
       else if (ms.summary) msCode = msToWMO(ms.summary);
       else if (ms.all_day && ms.all_day.weather) msCode = msToWMO(ms.all_day.weather);
 
-      if (days[msDate]) {
-        // Only override conditions for days NOT from WeatherAPI (days 4+)
-        if (days[msDate].src !== "wa") {
-          days[msDate].weather_code = msCode;
-          days[msDate].src = "ms";
-        }
-      } else {
-        var msMax = null, msMin = null;
-        if (ms.all_day) {
-          msMax = first(ms.all_day.temperature_max, ms.all_day.temperature);
-          msMin = first(ms.all_day.temperature_min);
-        }
+      if (!days[msDate]) {
         days[msDate] = {
           date: msDate,
           weather_code: msCode,
-          max_temp: msMax,
-          min_temp: msMin,
+          max_temp: null,
+          min_temp: null,
           precip_chance: 0,
-          sunrise: null, sunset: null, uv: null,
+          sunrise: null,
+          sunset: null,
+          uv: null,
           src: "ms"
         };
+      } else if (days[msDate].src !== "wa") {
+        days[msDate].weather_code = msCode;
+        days[msDate].src = "ms";
       }
     }
   }
 
-  // Step 6: Visual Crossing for days 8-15 (conditions + temperatures)
-  // Also fills sunrise/sunset and UV for all days
+  // Step 3: Visual Crossing conditions for days 8-15
   if (vcData && vcData.days) {
     console.log("VC days:", vcData.days.length);
     for (var v = 0; v < vcData.days.length; v++) {
@@ -635,12 +530,11 @@ function buildDaily(waData, wbData, msData, vcData, omData) {
       if (!vc.datetime) continue;
 
       if (!days[vc.datetime]) {
-        // Brand new day (days 8-15) — VC provides EVERYTHING
         days[vc.datetime] = {
           date: vc.datetime,
           weather_code: vcToWMO(first(vc.icon, vc.conditions, "")),
-          max_temp: vc.tempmax,
-          min_temp: vc.tempmin,
+          max_temp: vc.tempmax, // fallback only
+          min_temp: vc.tempmin, // fallback only
           precip_chance: vc.precipprob || 0,
           sunrise: vc.sunrise ? vc.datetime + "T" + vc.sunrise : null,
           sunset: vc.sunset ? vc.datetime + "T" + vc.sunset : null,
@@ -648,25 +542,87 @@ function buildDaily(waData, wbData, msData, vcData, omData) {
           src: "vc"
         };
       } else {
-        // Fill missing sunrise/sunset/UV from VC
-        if (!days[vc.datetime].sunrise && vc.sunrise) {
-          days[vc.datetime].sunrise = vc.datetime + "T" + vc.sunrise;
-        }
-        if (!days[vc.datetime].sunset && vc.sunset) {
-          days[vc.datetime].sunset = vc.datetime + "T" + vc.sunset;
-        }
-        if (days[vc.datetime].uv == null && vc.uvindex != null) {
-          days[vc.datetime].uv = vc.uvindex;
-        }
-        // Fill missing precip
-        if (!days[vc.datetime].precip_chance && vc.precipprob) {
-          days[vc.datetime].precip_chance = vc.precipprob;
-        }
+        if (!days[vc.datetime].sunrise && vc.sunrise) days[vc.datetime].sunrise = vc.datetime + "T" + vc.sunrise;
+        if (!days[vc.datetime].sunset && vc.sunset) days[vc.datetime].sunset = vc.datetime + "T" + vc.sunset;
+        if (days[vc.datetime].uv == null && vc.uvindex != null) days[vc.datetime].uv = vc.uvindex;
       }
     }
   }
 
-  // Sort and limit
+  // Step 4: Open-Meteo temperatures for ALL 15 days (primary temp source)
+  if (omData && omData.daily && omData.daily.time) {
+    console.log("OM days:", omData.daily.time.length);
+    var omd = omData.daily;
+    for (var o = 0; o < omd.time.length && o < 15; o++) {
+      var omDate = omd.time[o];
+      var omMax = omd.temperature_2m_max ? omd.temperature_2m_max[o] : null;
+      var omMin = omd.temperature_2m_min ? omd.temperature_2m_min[o] : null;
+
+      if (days[omDate]) {
+        if (omMax != null) days[omDate].max_temp = omMax;
+        if (omMin != null) days[omDate].min_temp = omMin;
+      } else {
+        days[omDate] = {
+          date: omDate,
+          weather_code: 0,
+          max_temp: omMax,
+          min_temp: omMin,
+          precip_chance: 0,
+          sunrise: null,
+          sunset: null,
+          uv: null,
+          src: "om"
+        };
+      }
+    }
+  } else {
+    console.log("Open-Meteo unavailable, using fallbacks for temps");
+  }
+
+  // Step 5: Weatherbit fallback temperatures for days 1-7 only if OM missing
+  if ((!omData || !omData.daily) && wbData && wbData.data) {
+    console.log("Using Weatherbit fallback temps");
+    for (var j = 0; j < wbData.data.length; j++) {
+      var wb = wbData.data[j];
+      var wbDate = wb.datetime || wb.valid_date;
+      if (!wbDate) continue;
+
+      var wbMax = first(wb.high_temp, wb.max_temp, wb.app_max_temp);
+      var wbMin = first(wb.low_temp, wb.min_temp, wb.app_min_temp);
+      var wbUv = first(wb.uv, wb.max_uv);
+
+      if (days[wbDate]) {
+        if (days[wbDate].max_temp == null && wbMax != null) days[wbDate].max_temp = wbMax;
+        if (days[wbDate].min_temp == null && wbMin != null) days[wbDate].min_temp = wbMin;
+        if (days[wbDate].uv == null && wbUv != null) days[wbDate].uv = wbUv;
+      }
+    }
+  }
+
+  // Step 6: Visual Crossing fallback temperatures for days 8-15 only if OM missing
+  if ((!omData || !omData.daily) && vcData && vcData.days) {
+    console.log("Using VC fallback temps for days 8-15");
+    for (var vv = 0; vv < vcData.days.length; vv++) {
+      var vcd = vcData.days[vv];
+      if (!vcd.datetime) continue;
+      if (days[vcd.datetime]) {
+        if (days[vcd.datetime].max_temp == null && vcd.tempmax != null) days[vcd.datetime].max_temp = vcd.tempmax;
+        if (days[vcd.datetime].min_temp == null && vcd.tempmin != null) days[vcd.datetime].min_temp = vcd.tempmin;
+      }
+    }
+  }
+
+  // Step 7: Weatherbit UV fill
+  if (wbData && wbData.data) {
+    for (var u = 0; u < wbData.data.length; u++) {
+      var wbu = wbData.data[u];
+      var wbuDate = wbu.datetime || wbu.valid_date;
+      if (wbuDate && days[wbuDate] && days[wbuDate].uv == null) {
+        days[wbuDate].uv = first(wbu.uv, wbu.max_uv);
+      }
+    }
+  }
+
   var sorted = Object.values(days).sort(function (a, b) {
     return new Date(a.date) - new Date(b.date);
   });
@@ -686,10 +642,12 @@ function buildDaily(waData, wbData, msData, vcData, omData) {
 
 function buildMonthly(vcData) {
   var monthly = [];
-  if (!vcData) { console.log("VC null for monthly"); return monthly; }
-  if (!vcData.days) { console.log("VC no days. Keys:", Object.keys(vcData).join(",")); return monthly; }
+  if (!vcData || !vcData.days) {
+    console.log("VC missing for monthly");
+    return monthly;
+  }
 
-  console.log("Monthly from " + vcData.days.length + " VC days");
+  console.log("Building monthly from", vcData.days.length, "VC days");
   for (var i = 0; i < vcData.days.length; i++) {
     var d = vcData.days[i];
     if (!d.datetime) continue;
@@ -721,20 +679,33 @@ function buildAQ(waData, wbData) {
 
 /* ───── ROUTES ───── */
 
-app.get("/", function (req, res) { res.send("RealWeather backend running"); });
+app.get("/", function (req, res) {
+  res.send("RealWeather backend running");
+});
 
 app.get("/api/search", async function (req, res) {
   try {
     var q = (req.query.q || "").trim();
     if (!q) return res.json({ results: [] });
+
     var wa = await sf("https://api.weatherapi.com/v1/search.json?key=" + WEATHERAPI_KEY + "&q=" + encodeURIComponent(q), "Search");
     if (wa && wa.length) {
-      return res.json({ results: wa.map(function (i) { return { name: i.name || "", region: i.region || "", country: i.country || "", latitude: i.lat, longitude: i.lon }; }) });
+      return res.json({
+        results: wa.map(function (i) {
+          return { name: i.name || "", region: i.region || "", country: i.country || "", latitude: i.lat, longitude: i.lon };
+        })
+      });
     }
+
     var om = await sf("https://geocoding-api.open-meteo.com/v1/search?name=" + encodeURIComponent(q) + "&count=8&language=en&format=json", "OM-Search");
     if (om && om.results) {
-      return res.json({ results: om.results.map(function (i) { return { name: i.name || "", region: i.admin1 || "", country: i.country || "", latitude: i.latitude, longitude: i.longitude }; }) });
+      return res.json({
+        results: om.results.map(function (i) {
+          return { name: i.name || "", region: i.admin1 || "", country: i.country || "", latitude: i.latitude, longitude: i.longitude };
+        })
+      });
     }
+
     res.json({ results: [] });
   } catch (e) {
     console.log("SEARCH ERR:", e);
@@ -792,29 +763,17 @@ app.get("/api/weather", async function (req, res) {
     var waCurr = waData.current || {};
     var waLoc = waData.location || {};
     var tz = waLoc.tz_id || (omData ? omData.timezone : null) || "UTC";
-
     console.log("Timezone:", tz);
 
-    // Build hourly from WeatherAPI using epoch for correct timezone
     var hourly = buildHourlyFromWA(waData, tz);
-
-    // Extend with Pirate Weather
     hourly = extendHourlyWithPirate(hourly, prData, tz);
-    console.log("Total hourly:", hourly.time.length, "first:", hourly.time[0] || "none");
+    console.log("Total hourly:", hourly.time.length);
 
-    // Time periods
     var timePeriods = buildTimePeriods(waData, prData, tz);
-
-    // Daily 15-day
     var dailyArray = buildDaily(waData, wbData, msData, vcData, omData);
-
-    // Monthly from Visual Crossing
     var monthly = buildMonthly(vcData);
-
-    // Air quality
     var pm25 = buildAQ(waData, wbData);
 
-    // Rain chance
     var rainChance = null;
     if (prData && prData.currently && prData.currently.precipProbability != null) {
       rainChance = Math.round(prData.currently.precipProbability * 100);
@@ -829,22 +788,18 @@ app.get("/api/weather", async function (req, res) {
       if (waDay0) rainChance = first(waDay0.daily_chance_of_rain, waDay0.daily_chance_of_snow, 0);
     }
 
-    // Visibility
     var visibility = null;
     if (owData && owData.visibility != null) visibility = owData.visibility;
     if (visibility == null && waCurr.vis_km != null) visibility = waCurr.vis_km * 1000;
 
-    // Humidity
     var humidity = null;
     if (owData && owData.main && owData.main.humidity != null) humidity = owData.main.humidity;
     if (humidity == null) humidity = waCurr.humidity;
 
-    // UV
     var uv = null;
     if (wbData && wbData.data && wbData.data[0]) uv = first(wbData.data[0].uv, wbData.data[0].max_uv);
     if (uv == null) uv = waCurr.uv;
 
-    // Daily arrays
     var dTime = [], dCode = [], dMax = [], dMin = [], dPrecip = [], dSunrise = [], dSunset = [], dUv = [];
     for (var i = 0; i < dailyArray.length; i++) {
       var dy = dailyArray[i];
