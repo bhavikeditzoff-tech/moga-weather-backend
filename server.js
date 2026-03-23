@@ -27,7 +27,7 @@ var recommendationsCache = {};
 var GENERAL_CACHE_MS = 10 * 60 * 1000;
 var ACCU_LOCATION_CACHE_MS = 7 * 24 * 60 * 60 * 1000;
 var ACCU_FORECAST_CACHE_MS = 6 * 60 * 60 * 1000;
-var RECOMMENDATIONS_CACHE_MS = 60 * 60 * 1000; // 1 hour
+var RECOMMENDATIONS_CACHE_MS = 60 * 60 * 1000;
 
 function getCached(store, key, maxAge) {
   var entry = store[key];
@@ -98,9 +98,17 @@ function majority(values) {
   return best;
 }
 
+/* ───── FIX: sf with 429 awareness ───── */
+// If a source returns 429 (rate limited), we log and return null gracefully
+// rather than retrying and making things worse.
+
 function sf(url, label) {
   return fetch(url)
     .then(function (r) {
+      if (r.status === 429) {
+        console.log(label + " rate-limited (429) — skipping");
+        return null;
+      }
       if (!r.ok) {
         return r.text().catch(function () { return ""; }).then(function (t) {
           console.log(label + " HTTP " + r.status + ": " + t.substring(0, 500));
@@ -442,7 +450,6 @@ function computeStormProbability(precipProb, cloudCover, cape) {
   var capeVal = first(cape, 0);
   var capeFactor = getCapeFactor(capeVal);
 
-  // No storm possible if precip < 30% regardless of CAPE
   if (p < 30) return 0;
 
   var stormProbability = (p * 0.6) + (c * 0.1) + (capeFactor * 0.3);
@@ -714,9 +721,9 @@ function buildMonthly(omMonthlyData, dailyArray) {
 }
 
 /* ───── RECOMMENDATIONS (Gemini AI) ───── */
+// FIX: Updated to gemini-2.0-flash which is available on v1beta
 
 async function buildRecommendations(payload) {
-  // Cache key: location + condition + temp (changes meaningfully per hour at most)
   var cacheKey = (payload.locationName || "") + "|" + (payload.conditionText || "") + "|" + (payload.currentTemp || "");
   var cached = getCached(recommendationsCache, cacheKey, RECOMMENDATIONS_CACHE_MS);
   if (cached) {
@@ -749,7 +756,8 @@ async function buildRecommendations(payload) {
       "- Sunset: " + (payload.sunsetText || "Unknown") + "\n";
 
     var response = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + GEMINI_KEY,
+      // FIX: gemini-1.5-flash → gemini-2.0-flash
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + GEMINI_KEY,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -776,15 +784,12 @@ async function buildRecommendations(payload) {
         ? data.candidates[0].content.parts[0].text
         : "";
 
-    // Strip markdown fences if present
     text = text.replace(/```json|```/g, "").trim();
 
     var parsed = JSON.parse(text);
 
-    // Flatten if Gemini wraps in extra array
     if (Array.isArray(parsed) && Array.isArray(parsed[0])) parsed = parsed[0];
 
-    // Extract strings if Gemini returns objects
     parsed = parsed.map(function (r) {
       return typeof r === "string" ? r : (r.text || r.recommendation || r.message || JSON.stringify(r));
     });
@@ -799,7 +804,6 @@ async function buildRecommendations(payload) {
     console.log("Gemini recommendations ERR:", e.message);
   }
 
-  // Fallback to deterministic if Gemini fails
   return buildRecommendationsFallback(payload);
 }
 
@@ -1052,6 +1056,10 @@ function fetchCheckWX(loc) {
     { headers: { "X-API-Key": CHECKWX_API_KEY } }
   )
     .then(function (r) {
+      if (r.status === 429) {
+        console.log("CheckWX rate-limited (429) — skipping");
+        return null;
+      }
       if (!r.ok) {
         return r.text().then(function (t) {
           console.log("CheckWX HTTP " + r.status + ": " + t.substring(0, 300));
