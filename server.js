@@ -103,48 +103,6 @@ function c12to24(t) {
   return h.padStart(2, "0") + ":" + m + ":00";
 }
 
-function epochToLocalISO(epochSec, tz) {
-  var d = new Date(epochSec * 1000);
-  try {
-    var parts = new Intl.DateTimeFormat("en-CA", {
-      timeZone: tz,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23"
-    }).formatToParts(d);
-
-    var yy = "", mm = "", dd = "", hh = "", mi = "";
-    for (var i = 0; i < parts.length; i++) {
-      if (parts[i].type === "year") yy = parts[i].value;
-      if (parts[i].type === "month") mm = parts[i].value;
-      if (parts[i].type === "day") dd = parts[i].value;
-      if (parts[i].type === "hour") hh = parts[i].value;
-      if (parts[i].type === "minute") mi = parts[i].value;
-    }
-    return yy + "-" + mm + "-" + dd + "T" + hh + ":" + mi + ":00";
-  } catch (e) {
-    return d.toISOString();
-  }
-}
-
-function getLocalHour(epochSec, tz) {
-  try {
-    var d = new Date(epochSec * 1000);
-    var parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: tz,
-      hour: "numeric",
-      hourCycle: "h23"
-    }).formatToParts(d);
-    for (var i = 0; i < parts.length; i++) {
-      if (parts[i].type === "hour") return parseInt(parts[i].value);
-    }
-  } catch (e) {}
-  return new Date(epochSec * 1000).getUTCHours();
-}
-
 /* ───── CONVERTERS ───── */
 
 function waCodeToWMO(c) {
@@ -242,7 +200,28 @@ function owmCodeToWMO(c) {
   return 0;
 }
 
-/* ───── AQI / HELPERS ───── */
+function getWeatherText(code, isDay) {
+  if (isDay === undefined) isDay = 1;
+  if (code === 0) return isDay ? "Sunny" : "Clear night";
+  if (code === 1) return isDay ? "Mostly sunny" : "Mostly clear";
+  if (code === 2) return isDay ? "Partly cloudy" : "Night cloudy";
+  if (code === 3) return "Overcast";
+  if (code === 45 || code === 48) return "Fog";
+  if (code >= 51 && code <= 55) return "Drizzle";
+  if (code === 56 || code === 57) return "Freezing drizzle";
+  if (code === 61) return "Light rain";
+  if (code === 63) return "Rain";
+  if (code === 65) return "Heavy rain";
+  if (code === 66 || code === 67) return "Freezing rain";
+  if (code >= 71 && code <= 77) return "Snow";
+  if (code >= 80 && code <= 82) return "Showers";
+  if (code === 85 || code === 86) return "Snow showers";
+  if (code === 95) return "Thunderstorm";
+  if (code === 96 || code === 99) return "Thunderstorm with hail";
+  return "Weather update";
+}
+
+/* ───── MISC HELPERS ───── */
 
 function buildAQ(waData, wbDaily) {
   var values = [];
@@ -280,278 +259,6 @@ function majority(values) {
   return best;
 }
 
-/* ───── LOCATION ───── */
-
-var PRESETS = {
-  moga: { key: "moga", name: "Moga", region: "Punjab", country: "India", lat: 30.8165, lon: 75.1717 }
-};
-
-async function resolveLoc(q) {
-  var city = (q.city || "").trim();
-  var ckey = city.toLowerCase();
-  var lat = q.lat != null ? Number(q.lat) : null;
-  var lon = q.lon != null ? Number(q.lon) : null;
-
-  if (lat != null && lon != null && !isNaN(lat) && !isNaN(lon)) {
-    var r = await sf("https://api.weatherapi.com/v1/search.json?key=" + WEATHERAPI_KEY + "&q=" + lat + "," + lon, "RevGeo");
-    if (r && r.length) {
-      return {
-        key: "coords",
-        name: r[0].name || "",
-        region: r[0].region || "",
-        country: r[0].country || "",
-        lat: lat,
-        lon: lon
-      };
-    }
-    return { key: "coords", name: "", region: "", country: "", lat: lat, lon: lon };
-  }
-
-  if (ckey && PRESETS[ckey]) return PRESETS[ckey];
-
-  if (city) {
-    var wa = await sf("https://api.weatherapi.com/v1/search.json?key=" + WEATHERAPI_KEY + "&q=" + encodeURIComponent(city), "WA-Geo");
-    if (wa && wa.length) {
-      return {
-        key: ckey,
-        name: wa[0].name || city,
-        region: wa[0].region || "",
-        country: wa[0].country || "",
-        lat: wa[0].lat,
-        lon: wa[0].lon
-      };
-    }
-  }
-
-  return PRESETS.moga;
-}
-
-async function resolveIp() {
-  return PRESETS.moga;
-}
-
-/* ───── FETCHERS ───── */
-
-async function fetchWeatherApi(loc) {
-  return await sf(
-    "https://api.weatherapi.com/v1/forecast.json?key=" + WEATHERAPI_KEY +
-      "&q=" + loc.lat + "," + loc.lon +
-      "&days=3&aqi=yes&alerts=no",
-    "WeatherAPI"
-  );
-}
-
-async function fetchTomorrowCurrent(loc) {
-  if (!TOMORROW_KEY) return null;
-  return await sf(
-    "https://api.tomorrow.io/v4/timelines?location=" + loc.lat + "," + loc.lon +
-      "&fields=temperature,temperatureApparent,cloudCover,dewPoint,treeIndex,grassIndex,weedIndex" +
-      "&timesteps=current&units=metric&apikey=" + TOMORROW_KEY,
-    "Tomorrow-Current"
-  );
-}
-
-async function fetchTomorrowHourly(loc) {
-  if (!TOMORROW_KEY) return null;
-  return await sf(
-    "https://api.tomorrow.io/v4/timelines?location=" + loc.lat + "," + loc.lon +
-      "&fields=temperature,weatherCode" +
-      "&timesteps=1h&units=metric&apikey=" + TOMORROW_KEY,
-    "Tomorrow-Hourly"
-  );
-}
-
-async function fetchWeatherbitCurrent(loc) {
-  if (!WEATHERBIT_KEY) return null;
-  return await sf(
-    "https://api.weatherbit.io/v2.0/current?lat=" + loc.lat + "&lon=" + loc.lon + "&key=" + WEATHERBIT_KEY,
-    "Weatherbit-Current"
-  );
-}
-
-async function fetchWeatherbitDaily(loc) {
-  if (!WEATHERBIT_KEY) return null;
-  return await sf(
-    "https://api.weatherbit.io/v2.0/forecast/daily?lat=" + loc.lat + "&lon=" + loc.lon + "&days=7&key=" + WEATHERBIT_KEY,
-    "Weatherbit-Daily"
-  );
-}
-
-async function fetchPirate(loc) {
-  if (!PIRATE_KEY) return null;
-  return await sf(
-    "https://api.pirateweather.net/forecast/" + PIRATE_KEY + "/" + loc.lat + "," + loc.lon +
-      "?units=si&exclude=minutely,alerts",
-    "Pirate"
-  );
-}
-
-async function fetchOpenWeather(loc) {
-  if (!OPENWEATHER_KEY) return null;
-  return await sf(
-    "https://api.openweathermap.org/data/2.5/weather?lat=" + loc.lat + "&lon=" + loc.lon +
-      "&appid=" + OPENWEATHER_KEY + "&units=metric",
-    "OpenWeather"
-  );
-}
-
-async function fetchOpenMeteoCurrent(loc) {
-  return await sf(
-    "https://api.open-meteo.com/v1/forecast?latitude=" + loc.lat +
-      "&longitude=" + loc.lon +
-      "&current=temperature_2m,apparent_temperature&timezone=auto",
-    "OpenMeteo-Current"
-  );
-}
-
-async function fetchOpenMeteoHourly(loc) {
-  return await sf(
-    "https://api.open-meteo.com/v1/forecast?latitude=" + loc.lat +
-      "&longitude=" + loc.lon +
-      "&hourly=temperature_2m,weather_code,is_day&timezone=auto&forecast_days=2",
-    "OpenMeteo-Hourly"
-  );
-}
-
-async function fetchOpenMeteoDaily7(loc) {
-  return await sf(
-    "https://api.open-meteo.com/v1/forecast?latitude=" + loc.lat +
-      "&longitude=" + loc.lon +
-      "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset,uv_index_max" +
-      "&timezone=auto&forecast_days=7",
-    "OpenMeteo-Daily7"
-  );
-}
-
-async function fetchOpenMeteoStorm(loc) {
-  return await sf(
-    "https://api.open-meteo.com/v1/forecast?latitude=" + loc.lat +
-      "&longitude=" + loc.lon +
-      "&hourly=cape,precipitation_probability&timezone=auto&forecast_days=1",
-    "OpenMeteo-Storm"
-  );
-}
-
-async function fetchVisualCrossing7(loc) {
-  if (!VISUAL_CROSSING_KEY) return null;
-  var now = new Date();
-  var start = now.toISOString().split("T")[0];
-  var endDate = new Date(now);
-  endDate.setDate(endDate.getDate() + 6);
-  var end = endDate.toISOString().split("T")[0];
-
-  return await sf(
-    "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/" +
-      loc.lat + "," + loc.lon + "/" + start + "/" + end +
-      "?key=" + VISUAL_CROSSING_KEY + "&unitGroup=metric&include=days",
-    "VisualCrossing-7"
-  );
-}
-
-async function fetchAccuLocationKey(loc) {
-  if (!ACCUWEATHER_API_KEY) return null;
-
-  var key = makeCK(loc.lat, loc.lon);
-  var cached = getCached(accuLocationCache, key, ACCU_LOCATION_CACHE_MS);
-  if (cached) return cached;
-
-  var url =
-    "https://dataservice.accuweather.com/locations/v1/cities/geoposition/search?apikey=" +
-    ACCUWEATHER_API_KEY + "&q=" + loc.lat + "%2C" + loc.lon;
-
-  var data = await sf(url, "AccuWeather-Location");
-  if (data && data.Key) {
-    setCached(accuLocationCache, key, data.Key);
-    return data.Key;
-  }
-  return null;
-}
-
-async function fetchAccuForecast(loc) {
-  if (!ACCUWEATHER_API_KEY) {
-    console.log("AccuWeather forecast skipped: missing key");
-    return null;
-  }
-
-  var key = makeCK(loc.lat, loc.lon);
-  var cached = getCached(accuForecastCache, key, ACCU_FORECAST_CACHE_MS);
-  if (cached) {
-    console.log("AccuWeather forecast cache hit:", key);
-    return cached;
-  }
-
-  var locationKey = await fetchAccuLocationKey(loc);
-  if (!locationKey) {
-    console.log("AccuWeather forecast skipped: no location key");
-    return null;
-  }
-
-  var url =
-    "https://dataservice.accuweather.com/forecasts/v1/daily/5day/" +
-    locationKey +
-    "?apikey=" + ACCUWEATHER_API_KEY +
-    "&metric=true&details=true";
-
-  var data = await sf(url, "AccuWeather-5Day");
-  if (data && data.DailyForecasts) {
-    setCached(accuForecastCache, key, data);
-    return data;
-  }
-
-  console.log("AccuWeather forecast failed");
-  return null;
-}
-
-async function fetchVisualCrossingMonthly(loc) {
-  if (!VISUAL_CROSSING_KEY) return null;
-
-  var now = new Date();
-  var y = now.getFullYear();
-  var m = String(now.getMonth() + 1).padStart(2, "0");
-  var monthStart = y + "-" + m + "-01";
-  var monthEndDate = new Date(y, now.getMonth() + 1, 0);
-  var monthEnd = monthEndDate.toISOString().split("T")[0];
-
-  return await sf(
-    "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/" +
-      loc.lat + "," + loc.lon + "/" + monthStart + "/" + monthEnd +
-      "?key=" + VISUAL_CROSSING_KEY + "&unitGroup=metric&include=days",
-    "VisualCrossing-Monthly"
-  );
-}
-
-async function fetchMeteoblueCurrent(loc) {
-  if (!METEOBLUE_API_KEY) return null;
-  return await sf(
-    "https://my.meteoblue.com/packages/basic-1h?apikey=" + METEOBLUE_API_KEY +
-      "&lat=" + loc.lat + "&lon=" + loc.lon + "&asl=0&format=json",
-    "Meteoblue-Current"
-  );
-}
-
-async function fetchCheckWX(loc) {
-  if (!CHECKWX_API_KEY) return null;
-  return await fetch(
-    "https://api.checkwx.com/metar/lat/" + loc.lat + "/lon/" + loc.lon + "/radius/50/decoded",
-    { headers: { "X-API-Key": CHECKWX_API_KEY } }
-  )
-    .then(function (r) {
-      if (!r.ok) {
-        return r.text().catch(function () { return ""; }).then(function (t) {
-          console.log("CheckWX HTTP " + r.status + ": " + t.substring(0, 400));
-          return null;
-        });
-      }
-      return r.json();
-    })
-    .catch(function (e) {
-      console.log("CheckWX ERR:", e.message);
-      return null;
-    });
-}
-
-/* ───── PARSERS ───── */
-
 function parseTomorrowCurrent(tmData) {
   var vals = {
     temp: null,
@@ -580,62 +287,6 @@ function parseTomorrowCurrent(tmData) {
   return vals;
 }
 
-function parseTomorrowHourly(tmData, tz) {
-  var out = {
-    time: [],
-    temperature_2m: [],
-    weather_code: [],
-    is_day: []
-  };
-
-  if (!tmData || !tmData.data || !tmData.data.timelines || !tmData.data.timelines.length) {
-    return out;
-  }
-
-  var intervals = tmData.data.timelines[0].intervals || [];
-  var nowEpoch = Math.floor(Date.now() / 1000);
-  var count = 0;
-
-  for (var i = 0; i < intervals.length && count < 8; i++) {
-    var it = intervals[i];
-    if (!it.startTime || !it.values) continue;
-
-    var epoch = Math.floor(new Date(it.startTime).getTime() / 1000);
-    if (epoch < nowEpoch - 3600) continue;
-
-    var localStr = epochToLocalISO(epoch, tz);
-    var localHour = parseInt(localStr.substring(11, 13));
-
-    out.time.push(localStr);
-    out.temperature_2m.push(roundVal(it.values.temperature));
-
-    var wc = it.values.weatherCode;
-    var mapped = 2;
-    if (wc === 1000 || wc === 0) mapped = 0;
-    else if (wc === 1100) mapped = 1;
-    else if (wc === 1101) mapped = 2;
-    else if (wc === 1102 || wc === 1001) mapped = 3;
-    else if (wc === 2000 || wc === 2100) mapped = 45;
-    else if (wc === 4000) mapped = 51;
-    else if (wc === 4001) mapped = 63;
-    else if (wc === 4200) mapped = 61;
-    else if (wc === 4201) mapped = 65;
-    else if (wc === 5000 || wc === 5100) mapped = 71;
-    else if (wc === 5001 || wc === 5101) mapped = 75;
-    else if (wc === 6000) mapped = 56;
-    else if (wc === 6001 || wc === 6201) mapped = 67;
-    else if (wc === 6200) mapped = 66;
-    else if (wc === 7000 || wc === 7101 || wc === 7102) mapped = 77;
-    else if (wc === 8000) mapped = 95;
-
-    out.weather_code.push(mapped);
-    out.is_day.push((localHour >= 6 && localHour < 18) ? 1 : 0);
-    count++;
-  }
-
-  return out;
-}
-
 function parseMeteoblueCurrent(mbData) {
   var out = {
     cloudCover: null,
@@ -662,7 +313,6 @@ function parseMeteoblueCurrent(mbData) {
 
 function parseCheckWXCeiling(cwx) {
   if (!cwx || !cwx.data || !cwx.data.length) return null;
-
   var metar = cwx.data[0];
   if (!metar) return null;
 
@@ -764,7 +414,6 @@ function computeStormProbability(precipProb, cloudCover, cape, lightningBoost) {
     (capeFactor * 0.3);
 
   stormProbability += first(lightningBoost, 0);
-
   stormProbability = Math.max(0, Math.min(100, stormProbability));
   return roundVal(stormProbability);
 }
@@ -1033,6 +682,97 @@ function buildMonthly(vcMonthlyData, dailyArray) {
   });
 }
 
+/* ───── RECOMMENDATIONS ENGINE ───── */
+
+function buildRecommendations(payload) {
+  var recs = [];
+
+  var temp = payload.currentTemp;
+  var feels = payload.realFeel;
+  var rain = payload.rainChance;
+  var uv = payload.uv;
+  var aqi = payload.aqi;
+  var humidity = payload.humidity;
+  var wind = payload.wind;
+  var visibility = payload.visibilityKm;
+  var thunder = payload.thunderProbability;
+  var cloud = payload.cloudCover;
+  var sunset = payload.sunsetText;
+
+  if (temp != null) {
+    if (temp >= 35) recs.push("It’s extremely hot outside — limit long sun exposure and drink more water.");
+    else if (temp >= 30) recs.push("A warm day ahead — light clothing and hydration will help.");
+    else if (temp <= 12) recs.push("It’s quite cool — a light jacket may feel comfortable.");
+    else recs.push("The temperature is fairly comfortable for normal outdoor activity.");
+  }
+
+  if (feels != null && temp != null) {
+    if (feels - temp >= 3) recs.push("It feels warmer than the actual temperature, so outdoor heat may feel stronger than expected.");
+    else if (temp - feels >= 3) recs.push("Shade and airflow make it feel cooler than the actual temperature.");
+  }
+
+  if (rain != null) {
+    if (rain >= 70) recs.push("Rain is likely — carrying an umbrella is a smart idea.");
+    else if (rain >= 40) recs.push("There’s a fair chance of rain, so keep backup indoor plans ready.");
+    else recs.push("Rain risk is low, so outdoor plans should be fairly safe.");
+  }
+
+  if (uv != null) {
+    if (uv >= 8) recs.push("UV is very strong — sunscreen, sunglasses, and shade are strongly recommended.");
+    else if (uv >= 5) recs.push("Moderate to high UV levels — skin protection is worth considering.");
+  }
+
+  if (aqi != null) {
+    if (aqi > 150) recs.push("Air quality is poor — reduce prolonged outdoor exposure if possible.");
+    else if (aqi > 80) recs.push("Air quality is moderate — sensitive people may want to limit heavy outdoor activity.");
+    else recs.push("Air quality looks acceptable for most outdoor plans.");
+  }
+
+  if (humidity != null) {
+    if (humidity >= 80) recs.push("Humidity is high, so it may feel sticky outside even if temperatures are moderate.");
+    else if (humidity <= 30) recs.push("The air is fairly dry — staying hydrated can help.");
+  }
+
+  if (wind != null) {
+    if (wind >= 30) recs.push("It’s quite windy — secure light objects and expect breezy outdoor conditions.");
+  }
+
+  if (visibility != null) {
+    if (visibility <= 2) recs.push("Visibility is poor — travel carefully if you’re driving or commuting.");
+    else if (visibility <= 5) recs.push("Visibility is slightly reduced, so longer-distance travel may need extra caution.");
+  }
+
+  if (cloud != null) {
+    if (cloud >= 80) recs.push("Skies are heavily clouded, so sunlight will stay fairly limited.");
+    else if (cloud <= 20) recs.push("Skies are mostly clear, which is great for outdoor views and photos.");
+  }
+
+  if (thunder != null) {
+    if (thunder >= 60) recs.push("Thunderstorm potential is high — avoid exposed outdoor areas if conditions worsen.");
+    else if (thunder >= 30) recs.push("There is some thunderstorm risk, so keep an eye on the sky.");
+  }
+
+  if (sunset) {
+    recs.push("Sunset is around " + sunset + ", so late-evening plans should account for fading daylight.");
+  }
+
+  // Remove duplicates and keep a decent set
+  var unique = [];
+  var seen = {};
+  for (var i = 0; i < recs.length; i++) {
+    if (!seen[recs[i]]) {
+      unique.push(recs[i]);
+      seen[recs[i]] = true;
+    }
+  }
+
+  if (!unique.length) {
+    unique.push("Weather looks fairly stable right now, so normal day-to-day plans should be comfortable.");
+  }
+
+  return unique.slice(0, 8);
+}
+
 /* ───── ROUTES ───── */
 
 app.get("/", function (req, res) {
@@ -1214,6 +954,13 @@ app.get("/api/weather", async function (req, res) {
       lightningBoost
     );
 
+    var weatherCode = first(
+      owData && owData.weather && owData.weather[0] ? owmCodeToWMO(owData.weather[0].id) : null,
+      waCodeToWMO(waCurr.condition ? waCurr.condition.code : 1000)
+    );
+
+    var conditionText = getWeatherText(weatherCode, first(waCurr.is_day, 1));
+
     var skyMetrics = {
       realfeel_shade: realFeel != null ? roundVal(realFeel - 3) : null,
       cloud_cover: roundVal(first(mbCurrent.cloudCover, tmCurrent.cloudCover)),
@@ -1236,7 +983,6 @@ app.get("/api/weather", async function (req, res) {
       dUv.push(dy.uv);
     }
 
-    // daylight tracker from WeatherAPI sunrise/sunset
     if (waData && waData.forecast && waData.forecast.forecastday && waData.forecast.forecastday.length) {
       var wf = waData.forecast.forecastday;
       if (wf[0] && wf[0].astro) {
@@ -1248,6 +994,20 @@ app.get("/api/weather", async function (req, res) {
         dSunset[1] = wf[1].date + "T" + c12to24(wf[1].astro.sunset);
       }
     }
+
+    var recommendations = buildRecommendations({
+      currentTemp: roundVal(currentTemp),
+      realFeel: roundVal(realFeel),
+      rainChance: rainChance,
+      uv: uv,
+      aqi: pm25,
+      humidity: humidity,
+      wind: first(waCurr.wind_kph),
+      visibilityKm: visibility != null ? visibility / 1000 : null,
+      thunderProbability: stormProbability,
+      cloudCover: first(mbCurrent.cloudCover, tmCurrent.cloudCover),
+      sunsetText: dSunset[0] ? epochToLocalISO(Math.floor(new Date(dSunset[0]).getTime() / 1000), tz).substring(11, 16) : null
+    });
 
     var result = {
       timezone: tz,
@@ -1262,14 +1022,8 @@ app.get("/api/weather", async function (req, res) {
       },
       current: {
         temperature_c: roundVal(currentTemp),
-        weather_code: first(
-          owData && owData.weather && owData.weather[0] ? owmCodeToWMO(owData.weather[0].id) : null,
-          waCodeToWMO(waCurr.condition ? waCurr.condition.code : 1000)
-        ),
-        condition_text: first(
-          owData && owData.weather && owData.weather[0] ? owData.weather[0].description : null,
-          waCurr.condition ? waCurr.condition.text : null
-        ),
+        weather_code: weatherCode,
+        condition_text: conditionText,
         is_day: first(waCurr.is_day, 1),
         feelslike_c: roundVal(realFeel),
         humidity: humidity,
@@ -1282,6 +1036,7 @@ app.get("/api/weather", async function (req, res) {
         air_quality_pm25: pm25
       },
       sky_metrics: skyMetrics,
+      recommendations: recommendations,
       time_periods: timePeriods,
       hourly: hourly,
       daily: {
@@ -1305,6 +1060,8 @@ app.get("/api/weather", async function (req, res) {
       }
     }
 
+    putC(cKey, result);
+
     console.log("CheckWX ceiling feet:", checkwxCeilingFeet);
     console.log("Accu pollen:", accuPollen);
     console.log("Storm inputs:", {
@@ -1315,14 +1072,13 @@ app.get("/api/weather", async function (req, res) {
       final: stormProbability
     });
 
-    putC(cKey, result);
-
     console.log(
       "=== Done. Hourly:", hourly.time.length,
       "Daily:", dTime.length,
       "Monthly:", monthly.length,
       "CurrentTemp:", result.current.temperature_c,
       "RealFeel:", result.current.feelslike_c,
+      "Recommendations:", recommendations.length,
       "===\n"
     );
 
