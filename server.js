@@ -608,15 +608,24 @@ function parseCheckWXCeiling(cwx) {
     return metar.ceiling.feet;
   }
 
-  if (metar.clouds && Array.isArray(metar.clouds)) {
+  if (metar.clouds && Array.isArray(metar.clouds) && metar.clouds.length) {
+    var fallbackFeet = null;
+
     for (var i = 0; i < metar.clouds.length; i++) {
       var cl = metar.clouds[i];
       var code = String(cl.code || cl.type || "").toUpperCase();
-      var baseFeet = first(cl.base_feet_agl, cl.base_feet, cl.altitude_feet, cl.altitude);
+      var baseFeet = first(cl.base_feet_agl, cl.base_feet, cl.altitude_feet, cl.altitude, cl.feet);
+
       if ((code === "BKN" || code === "OVC" || code === "VV") && baseFeet != null) {
         return Number(baseFeet);
       }
+
+      if (fallbackFeet == null && baseFeet != null) {
+        fallbackFeet = Number(baseFeet);
+      }
     }
+
+    return fallbackFeet;
   }
 
   return null;
@@ -1229,10 +1238,10 @@ console.log("CheckWX ceiling parsed:", checkwxCeilingFeet);
 
     var conditionText = getWeatherText(weatherCode, first(waCurr.is_day, 1));
 
-    var skyMetrics = {
+      var skyMetrics = {
       realfeel_shade: realFeel != null ? roundVal(realFeel - 3) : null,
       cloud_cover: roundVal(first(mbCurrent.cloudCover, tmCurrent.cloudCover)),
-      cloud_ceiling: checkwxCeilingFeet != null ? roundVal(checkwxCeilingFeet / 3280.84) : null,
+      cloud_base: checkwxCeilingFeet != null ? roundVal(checkwxCeilingFeet / 3280.84) : null,
       thunder_probability: stormProbability,
       dew_point: roundVal(tmCurrent.dewPoint),
       pollen_count: roundVal(accuPollen)
