@@ -352,26 +352,40 @@ async function fetchOpenMeteoCurrent(loc) {
 }
 
 async function fetchAccuLocationKey(loc) {
-  if (!ACCUWEATHER_KEY) return null;
+  if (!ACCUWEATHER_KEY) {
+    console.log("AccuWeather key missing");
+    return null;
+  }
 
   var key = makeCK(loc.lat, loc.lon);
   var cached = getCached(accuLocationCache, key, ACCU_LOCATION_CACHE_MS);
-  if (cached) return cached;
+  if (cached) {
+    console.log("AccuWeather location cache hit:", key, "->", cached);
+    return cached;
+  }
 
   var url =
-    "http://dataservice.accuweather.com/locations/v1/cities/geoposition/search?apikey=" +
+    "https://dataservice.accuweather.com/locations/v1/cities/geoposition/search?apikey=" +
     ACCUWEATHER_KEY + "&q=" + loc.lat + "%2C" + loc.lon;
 
   var data = await sf(url, "AccuWeather-Location");
+  console.log("AccuWeather location raw:", data);
+
   if (data && data.Key) {
     setCached(accuLocationCache, key, data.Key);
+    console.log("AccuWeather location key resolved:", data.Key);
     return data.Key;
   }
+
+  console.log("AccuWeather location lookup failed");
   return null;
 }
 
 async function fetchAccuForecast(loc) {
-  if (!ACCUWEATHER_KEY) return null;
+  if (!ACCUWEATHER_KEY) {
+    console.log("AccuWeather forecast skipped: missing key");
+    return null;
+  }
 
   var key = makeCK(loc.lat, loc.lon);
   var cached = getCached(accuForecastCache, key, ACCU_FORECAST_CACHE_MS);
@@ -381,19 +395,27 @@ async function fetchAccuForecast(loc) {
   }
 
   var locationKey = await fetchAccuLocationKey(loc);
-  if (!locationKey) return null;
+  if (!locationKey) {
+    console.log("AccuWeather forecast skipped: no location key");
+    return null;
+  }
 
   var url =
-    "http://dataservice.accuweather.com/forecasts/v1/daily/5day/" +
+    "https://dataservice.accuweather.com/forecasts/v1/daily/5day/" +
     locationKey +
     "?apikey=" + ACCUWEATHER_KEY +
     "&metric=true&details=true";
 
   var data = await sf(url, "AccuWeather-5Day");
+  console.log("AccuWeather forecast raw has DailyForecasts:", !!(data && data.DailyForecasts), "count:", data && data.DailyForecasts ? data.DailyForecasts.length : 0);
+
   if (data && data.DailyForecasts) {
     setCached(accuForecastCache, key, data);
+    return data;
   }
-  return data;
+
+  console.log("AccuWeather forecast failed");
+  return null;
 }
 
 async function fetchVisualCrossingMonthly(loc) {
