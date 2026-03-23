@@ -719,30 +719,41 @@ function buildHourlyFromOpenMeteo(omHourlyData, currentTemp) {
     is_day: []
   };
 
-  if (!omHourlyData || !omHourlyData.hourly || !omHourlyData.hourly.time) {
+  if (!omHourlyData || !omHourlyData.hourly || !omHourlyData.hourly.time || !omHourlyData.hourly.time.length) {
     return out;
   }
 
   var h = omHourlyData.hourly;
   var now = Date.now();
 
-  for (var i = 0; i < h.time.length && out.time.length < 24; i++) {
-    var ts = new Date(h.time[i]).getTime();
-    if (ts < now - 3600000) continue;
+  // Find nearest current hour instead of filtering by comparison only
+  var startIdx = 0;
+  var best = Infinity;
 
-    out.time.push(h.time[i]);
-    out.temperature_2m.push(h.temperature_2m ? roundVal(h.temperature_2m[i]) : null);
-    out.weather_code.push(h.weather_code ? h.weather_code[i] : 0);
-    out.is_day.push(h.is_day ? h.is_day[i] : 1);
+  for (var i = 0; i < h.time.length; i++) {
+    var ts = new Date(h.time[i]).getTime();
+    var diff = Math.abs(ts - now);
+    if (!isNaN(ts) && diff < best) {
+      best = diff;
+      startIdx = i;
+    }
+  }
+
+  for (var j = startIdx; j < h.time.length && out.time.length < 24; j++) {
+    out.time.push(h.time[j]);
+    out.temperature_2m.push(h.temperature_2m ? roundVal(h.temperature_2m[j]) : null);
+    out.weather_code.push(h.weather_code ? h.weather_code[j] : 0);
+    out.is_day.push(h.is_day ? h.is_day[j] : 1);
   }
 
   if (out.temperature_2m.length && currentTemp != null) {
     out.temperature_2m[0] = roundVal(currentTemp);
   }
 
+  console.log("OpenMeteo hourly startIdx:", startIdx, "first time:", out.time[0], "first temp:", out.temperature_2m[0]);
+
   return out;
 }
-
 /* ───── TIME PERIODS ───── */
 
 function buildTimePeriodsFromHourly(hourly, prData, tz) {
