@@ -188,7 +188,7 @@ function getIsDayNow(tz) {
   }
 }
 
-/* ───── WEATHER CODE CONVERTERS ───── */
+/* ───── CONVERTERS ───── */
 
 function waCodeToWMO(c) {
   var m = {
@@ -304,266 +304,6 @@ function getWeatherText(code, isDay) {
   if (code === 95) return "Thunderstorm";
   if (code === 96 || code === 99) return "Thunderstorm with hail";
   return "Weather update";
-}
-
-/* ───── LOCATION ───── */
-
-var PRESETS = {
-  moga: { key: "moga", name: "Moga", region: "Punjab", country: "India", lat: 30.8165, lon: 75.1717 }
-};
-
-async function resolveLoc(q) {
-  var city = (q.city || "").trim();
-  var ckey = city.toLowerCase();
-  var lat = q.lat != null ? Number(q.lat) : null;
-  var lon = q.lon != null ? Number(q.lon) : null;
-
-  if (lat != null && lon != null && !isNaN(lat) && !isNaN(lon)) {
-    var r = await sf("https://api.weatherapi.com/v1/search.json?key=" + WEATHERAPI_KEY + "&q=" + lat + "," + lon, "RevGeo");
-    if (r && r.length) {
-      return {
-        key: "coords",
-        name: r[0].name || "",
-        region: r[0].region || "",
-        country: r[0].country || "",
-        lat: lat,
-        lon: lon
-      };
-    }
-    return { key: "coords", name: "", region: "", country: "", lat: lat, lon: lon };
-  }
-
-  if (ckey && PRESETS[ckey]) return PRESETS[ckey];
-
-  if (city) {
-    var wa = await sf("https://api.weatherapi.com/v1/search.json?key=" + WEATHERAPI_KEY + "&q=" + encodeURIComponent(city), "WA-Geo");
-    if (wa && wa.length) {
-      return {
-        key: ckey,
-        name: wa[0].name || city,
-        region: wa[0].region || "",
-        country: wa[0].country || "",
-        lat: wa[0].lat,
-        lon: wa[0].lon
-      };
-    }
-  }
-
-  return PRESETS.moga;
-}
-
-async function resolveIp() {
-  return PRESETS.moga;
-}
-
-/* ───── FETCHERS ───── */
-
-async function fetchWeatherApi(loc) {
-  return await sf(
-    "https://api.weatherapi.com/v1/forecast.json?key=" + WEATHERAPI_KEY +
-      "&q=" + loc.lat + "," + loc.lon +
-      "&days=3&aqi=yes&alerts=no",
-    "WeatherAPI"
-  );
-}
-
-async function fetchTomorrowCurrent(loc) {
-  if (!TOMORROW_KEY) return null;
-  return await sf(
-    "https://api.tomorrow.io/v4/timelines?location=" + loc.lat + "," + loc.lon +
-      "&fields=temperature,temperatureApparent,cloudCover,dewPoint,treeIndex,grassIndex,weedIndex" +
-      "&timesteps=current&units=metric&apikey=" + TOMORROW_KEY,
-    "Tomorrow-Current"
-  );
-}
-
-async function fetchWeatherbitCurrent(loc) {
-  if (!WEATHERBIT_KEY) return null;
-  return await sf(
-    "https://api.weatherbit.io/v2.0/current?lat=" + loc.lat + "&lon=" + loc.lon + "&key=" + WEATHERBIT_KEY,
-    "Weatherbit-Current"
-  );
-}
-
-async function fetchWeatherbitDaily(loc) {
-  if (!WEATHERBIT_KEY) return null;
-  return await sf(
-    "https://api.weatherbit.io/v2.0/forecast/daily?lat=" + loc.lat + "&lon=" + loc.lon + "&days=7&key=" + WEATHERBIT_KEY,
-    "Weatherbit-Daily"
-  );
-}
-
-async function fetchPirate(loc) {
-  if (!PIRATE_KEY) return null;
-  return await sf(
-    "https://api.pirateweather.net/forecast/" + PIRATE_KEY + "/" + loc.lat + "," + loc.lon +
-      "?units=si&exclude=minutely,alerts",
-    "Pirate"
-  );
-}
-
-async function fetchOpenWeather(loc) {
-  if (!OPENWEATHER_KEY) return null;
-  return await sf(
-    "https://api.openweathermap.org/data/2.5/weather?lat=" + loc.lat + "&lon=" + loc.lon +
-      "&appid=" + OPENWEATHER_KEY + "&units=metric",
-    "OpenWeather"
-  );
-}
-
-async function fetchOpenMeteoCurrent(loc) {
-  return await sf(
-    "https://api.open-meteo.com/v1/forecast?latitude=" + loc.lat +
-      "&longitude=" + loc.lon +
-      "&current=temperature_2m,apparent_temperature&timezone=auto",
-    "OpenMeteo-Current"
-  );
-}
-
-async function fetchOpenMeteoHourly(loc) {
-  return await sf(
-    "https://api.open-meteo.com/v1/forecast?latitude=" + loc.lat +
-      "&longitude=" + loc.lon +
-      "&hourly=temperature_2m,weather_code,is_day&timezone=auto&forecast_days=2",
-    "OpenMeteo-Hourly"
-  );
-}
-
-async function fetchOpenMeteoDaily7(loc) {
-  return await sf(
-    "https://api.open-meteo.com/v1/forecast?latitude=" + loc.lat +
-      "&longitude=" + loc.lon +
-      "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset,uv_index_max" +
-      "&timezone=auto&forecast_days=7",
-    "OpenMeteo-Daily7"
-  );
-}
-
-async function fetchOpenMeteoStorm(loc) {
-  return await sf(
-    "https://api.open-meteo.com/v1/forecast?latitude=" + loc.lat +
-      "&longitude=" + loc.lon +
-      "&hourly=cape,precipitation_probability&timezone=auto&forecast_days=1",
-    "OpenMeteo-Storm"
-  );
-}
-
-async function fetchVisualCrossing7(loc) {
-  if (!VISUAL_CROSSING_KEY) return null;
-  var now = new Date();
-  var start = now.toISOString().split("T")[0];
-  var endDate = new Date(now);
-  endDate.setDate(endDate.getDate() + 6);
-  var end = endDate.toISOString().split("T")[0];
-
-  return await sf(
-    "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/" +
-      loc.lat + "," + loc.lon + "/" + start + "/" + end +
-      "?key=" + VISUAL_CROSSING_KEY + "&unitGroup=metric&include=days",
-    "VisualCrossing-7"
-  );
-}
-
-async function fetchAccuLocationKey(loc) {
-  if (!ACCUWEATHER_API_KEY) return null;
-
-  var key = makeCK(loc.lat, loc.lon);
-  var cached = getCached(accuLocationCache, key, ACCU_LOCATION_CACHE_MS);
-  if (cached) return cached;
-
-  var url =
-    "https://dataservice.accuweather.com/locations/v1/cities/geoposition/search?apikey=" +
-    ACCUWEATHER_API_KEY + "&q=" + loc.lat + "%2C" + loc.lon;
-
-  var data = await sf(url, "AccuWeather-Location");
-  if (data && data.Key) {
-    setCached(accuLocationCache, key, data.Key);
-    return data.Key;
-  }
-  return null;
-}
-
-async function fetchAccuForecast(loc) {
-  if (!ACCUWEATHER_API_KEY) {
-    console.log("AccuWeather forecast skipped: missing key");
-    return null;
-  }
-
-  var key = makeCK(loc.lat, loc.lon);
-  var cached = getCached(accuForecastCache, key, ACCU_FORECAST_CACHE_MS);
-  if (cached) {
-    console.log("AccuWeather forecast cache hit:", key);
-    return cached;
-  }
-
-  var locationKey = await fetchAccuLocationKey(loc);
-  if (!locationKey) {
-    console.log("AccuWeather forecast skipped: no location key");
-    return null;
-  }
-
-  var url =
-    "https://dataservice.accuweather.com/forecasts/v1/daily/5day/" +
-    locationKey +
-    "?apikey=" + ACCUWEATHER_API_KEY +
-    "&metric=true&details=true";
-
-  var data = await sf(url, "AccuWeather-5Day");
-  if (data && data.DailyForecasts) {
-    setCached(accuForecastCache, key, data);
-    return data;
-  }
-
-  console.log("AccuWeather forecast failed");
-  return null;
-}
-
-async function fetchVisualCrossingMonthly(loc) {
-  if (!VISUAL_CROSSING_KEY) return null;
-
-  var now = new Date();
-  var y = now.getFullYear();
-  var m = String(now.getMonth() + 1).padStart(2, "0");
-  var monthStart = y + "-" + m + "-01";
-  var monthEndDate = new Date(y, now.getMonth() + 1, 0);
-  var monthEnd = monthEndDate.toISOString().split("T")[0];
-
-  return await sf(
-    "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/" +
-      loc.lat + "," + loc.lon + "/" + monthStart + "/" + monthEnd +
-      "?key=" + VISUAL_CROSSING_KEY + "&unitGroup=metric&include=days",
-    "VisualCrossing-Monthly"
-  );
-}
-
-async function fetchMeteoblueCurrent(loc) {
-  if (!METEOBLUE_API_KEY) return null;
-  return await sf(
-    "https://my.meteoblue.com/packages/basic-1h?apikey=" + METEOBLUE_API_KEY +
-      "&lat=" + loc.lat + "&lon=" + loc.lon + "&asl=0&format=json",
-    "Meteoblue-Current"
-  );
-}
-
-async function fetchCheckWX(loc) {
-  if (!CHECKWX_API_KEY) return null;
-  return await fetch(
-    "https://api.checkwx.com/metar/lat/" + loc.lat + "/lon/" + loc.lon + "/radius/50/decoded",
-    { headers: { "X-API-Key": CHECKWX_API_KEY } }
-  )
-    .then(function (r) {
-      if (!r.ok) {
-        return r.text().catch(function () { return ""; }).then(function (t) {
-          console.log("CheckWX HTTP " + r.status + ": " + t.substring(0, 400));
-          return null;
-        });
-      }
-      return r.json();
-    })
-    .catch(function (e) {
-      console.log("CheckWX ERR:", e.message);
-      return null;
-    });
 }
 
 /* ───── PARSERS ───── */
@@ -1210,6 +950,7 @@ app.get("/api/weather", async function (req, res) {
     );
 
     var currentIsDay = first(waCurr.is_day, getIsDayNow(tz));
+    var conditionText = getWeatherText(weatherCode, currentIsDay);
 
     var hourly = buildHourlyFromOpenMeteo(
       omHourlyData,
@@ -1262,8 +1003,6 @@ app.get("/api/weather", async function (req, res) {
       first(mbCurrent.cloudCover, tmCurrent.cloudCover),
       omStorm.cape
     );
-
-    var conditionText = getWeatherText(weatherCode, currentIsDay);
 
     var skyMetrics = {
       realfeel_shade: realFeel != null ? roundVal(realFeel - 3) : null,
@@ -1362,6 +1101,37 @@ app.get("/api/weather", async function (req, res) {
     console.log("ERROR:", e);
     res.status(500).json({ error: "Failed" });
   }
+});
+
+app.get("/api/search", async function (req, res) {
+  try {
+    var q = (req.query.q || "").trim();
+    if (!q) return res.json({ results: [] });
+
+    var wa = await sf("https://api.weatherapi.com/v1/search.json?key=" + WEATHERAPI_KEY + "&q=" + encodeURIComponent(q), "Search");
+    if (wa && wa.length) {
+      return res.json({
+        results: wa.map(function (i) {
+          return {
+            name: i.name || "",
+            region: i.region || "",
+            country: i.country || "",
+            latitude: i.lat,
+            longitude: i.lon
+          };
+        })
+      });
+    }
+
+    res.json({ results: [] });
+  } catch (e) {
+    console.log("SEARCH ERR:", e);
+    res.status(500).json({ results: [] });
+  }
+});
+
+app.get("/", function (req, res) {
+  res.send("RealWeather backend running");
 });
 
 var PORT = process.env.PORT || 3000;
