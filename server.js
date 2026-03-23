@@ -863,6 +863,249 @@ function buildRecommendations(payload) {
   return unique.slice(0, 8);
 }
 
+/* ───── LOCATION RESOLUTION ───── */
+
+async function resolveIp() {
+  try {
+    var r = await sf("https://ipapi.co/json/", "IP-resolve");
+    if (r && r.latitude && r.longitude) {
+      return {
+        lat: r.latitude,
+        lon: r.longitude,
+        name: r.city || "Unknown",
+        region: r.region || "",
+        country: r.country_name || "",
+        key: null
+      };
+    }
+  } catch (e) {
+    console.log("resolveIp ERR:", e.message);
+  }
+  // Fallback: London
+  return { lat: 51.5074, lon: -0.1278, name: "London", region: "England", country: "United Kingdom", key: null };
+}
+
+async function resolveLoc(query) {
+  // coords passed directly
+  if (query.lat != null && query.lon != null) {
+    var lat = parseFloat(query.lat);
+    var lon = parseFloat(query.lon);
+    // reverse-geocode with WeatherAPI to get a clean name
+    try {
+      var r = await sf(
+        "https://api.weatherapi.com/v1/search.json?key=" + WEATHERAPI_KEY + "&q=" + lat + "," + lon,
+        "ResolveLoc-coords"
+      );
+      if (r && r.length) {
+        return {
+          lat: lat,
+          lon: lon,
+          name: r[0].name || "",
+          region: r[0].region || "",
+          country: r[0].country || "",
+          key: null
+        };
+      }
+    } catch (e) {}
+    return { lat: lat, lon: lon, name: "", region: "", country: "", key: null };
+  }
+
+  // city name search
+  if (query.city) {
+    try {
+      var results = await sf(
+        "https://api.weatherapi.com/v1/search.json?key=" + WEATHERAPI_KEY + "&q=" + encodeURIComponent(query.city),
+        "ResolveLoc-city"
+      );
+      if (results && results.length) {
+        return {
+          lat: results[0].lat,
+          lon: results[0].lon,
+          name: results[0].name || query.city,
+          region: results[0].region || "",
+          country: results[0].country || "",
+          key: null
+        };
+      }
+    } catch (e) {}
+    return { lat: 51.5074, lon: -0.1278, name: query.city, region: "", country: "", key: null };
+  }
+
+  return resolveIp();
+}
+
+/* ───── DATA SOURCE FETCHERS ───── */
+
+function fetchWeatherApi(loc) {
+  return sf(
+    "https://api.weatherapi.com/v1/forecast.json?key=" + WEATHERAPI_KEY +
+    "&q=" + loc.lat + "," + loc.lon + "&days=3&aqi=yes",
+    "WeatherAPI"
+  );
+}
+
+function fetchTomorrowCurrent(loc) {
+  return sf(
+    "https://api.tomorrow.io/v4/timelines?location=" + loc.lat + "," + loc.lon +
+    "&fields=temperature,temperatureApparent,cloudCover,dewPoint,treeIndex,grassIndex,weedIndex" +
+    "&timesteps=current&units=metric&apikey=" + TOMORROW_KEY,
+    "Tomorrow"
+  );
+}
+
+function fetchWeatherbitCurrent(loc) {
+  return sf(
+    "https://api.weatherbit.io/v2.0/current?lat=" + loc.lat + "&lon=" + loc.lon +
+    "&key=" + WEATHERBIT_KEY + "&units=M",
+    "WeatherbitCurrent"
+  );
+}
+
+function fetchWeatherbitDaily(loc) {
+  return sf(
+    "https://api.weatherbit.io/v2.0/forecast/daily?lat=" + loc.lat + "&lon=" + loc.lon +
+    "&key=" + WEATHERBIT_KEY + "&units=M&days=7",
+    "WeatherbitDaily"
+  );
+}
+
+function fetchPirate(loc) {
+  return sf(
+    "https://api.pirateweather.net/forecast/" + PIRATE_KEY +
+    "/" + loc.lat + "," + loc.lon + "?units=si",
+    "Pirate"
+  );
+}
+
+function fetchOpenWeather(loc) {
+  return sf(
+    "https://api.openweathermap.org/data/2.5/weather?lat=" + loc.lat + "&lon=" + loc.lon +
+    "&appid=" + OPENWEATHER_KEY + "&units=metric",
+    "OpenWeather"
+  );
+}
+
+function fetchOpenMeteoCurrent(loc) {
+  return sf(
+    "https://api.open-meteo.com/v1/forecast?latitude=" + loc.lat + "&longitude=" + loc.lon +
+    "&current=temperature_2m,apparent_temperature,weather_code,is_day" +
+    "&timezone=auto",
+    "OMCurrent"
+  );
+}
+
+function fetchOpenMeteoHourly(loc) {
+  return sf(
+    "https://api.open-meteo.com/v1/forecast?latitude=" + loc.lat + "&longitude=" + loc.lon +
+    "&hourly=temperature_2m,weather_code,is_day" +
+    "&forecast_days=2&timezone=auto",
+    "OMHourly"
+  );
+}
+
+function fetchOpenMeteoDaily7(loc) {
+  return sf(
+    "https://api.open-meteo.com/v1/forecast?latitude=" + loc.lat + "&longitude=" + loc.lon +
+    "&daily=temperature_2m_max,temperature_2m_min,weather_code,precipitation_probability_max,sunrise,sunset,uv_index_max" +
+    "&forecast_days=7&timezone=auto",
+    "OMDaily7"
+  );
+}
+
+function fetchOpenMeteoStorm(loc) {
+  return sf(
+    "https://api.open-meteo.com/v1/forecast?latitude=" + loc.lat + "&longitude=" + loc.lon +
+    "&hourly=precipitation_probability,cape" +
+    "&forecast_days=1&timezone=auto",
+    "OMStorm"
+  );
+}
+
+async function fetchAccuForecast(loc) {
+  try {
+    var locKey = makeCK(loc.lat, loc.lon);
+    var cachedKey = getCached(accuLocationCache, locKey, ACCU_LOCATION_CACHE_MS);
+
+    if (!cachedKey) {
+      var locData = await sf(
+        "http://dataservice.accuweather.com/locations/v1/cities/geoposition/search?apikey=" + ACCUWEATHER_API_KEY +
+        "&q=" + loc.lat + "," + loc.lon,
+        "AccuLocation"
+      );
+      if (locData && locData.Key) {
+        cachedKey = locData.Key;
+        setCached(accuLocationCache, locKey, cachedKey);
+      }
+    }
+
+    if (!cachedKey) return null;
+
+    var cachedForecast = getCached(accuForecastCache, cachedKey, ACCU_FORECAST_CACHE_MS);
+    if (cachedForecast) return cachedForecast;
+
+    var forecast = await sf(
+      "http://dataservice.accuweather.com/forecasts/v1/daily/5day/" + cachedKey +
+      "?apikey=" + ACCUWEATHER_API_KEY + "&details=true&metric=true",
+      "AccuForecast"
+    );
+
+    if (forecast) setCached(accuForecastCache, cachedKey, forecast);
+    return forecast;
+  } catch (e) {
+    console.log("AccuWeather ERR:", e.message);
+    return null;
+  }
+}
+
+function fetchVisualCrossingMonthly(loc) {
+  var today = new Date();
+  var firstOfMonth = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().split("T")[0];
+  var todayStr = today.toISOString().split("T")[0];
+  return sf(
+    "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/" +
+    loc.lat + "," + loc.lon + "/" + firstOfMonth + "/" + todayStr +
+    "?key=" + VISUAL_CROSSING_KEY + "&unitGroup=metric&include=days&elements=datetime,tempmax,tempmin,icon,conditions",
+    "VCMonthly"
+  );
+}
+
+function fetchVisualCrossing7(loc) {
+  return sf(
+    "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/" +
+    loc.lat + "," + loc.lon +
+    "?key=" + VISUAL_CROSSING_KEY + "&unitGroup=metric&include=days&elements=datetime,tempmax,tempmin,icon,conditions,precipprob,sunrise,sunset,uvindex&forecast_days=7",
+    "VC7"
+  );
+}
+
+function fetchMeteoblueCurrent(loc) {
+  return sf(
+    "https://my.meteoblue.com/packages/basic-1h?apikey=" + METEOBLUE_API_KEY +
+    "&lat=" + loc.lat + "&lon=" + loc.lon + "&asl=50&format=json",
+    "Meteoblue"
+  );
+}
+
+function fetchCheckWX(loc) {
+  return sf(
+    "https://api.checkwx.com/metar/lat/" + loc.lat + "/lon/" + loc.lon + "/decoded",
+    "CheckWX"
+  ).then(function (r) { return r; }).catch(function () { return null; });
+}
+
+function buildAQ(waData, wbDaily) {
+  try {
+    if (waData && waData.current && waData.current.air_quality) {
+      var aq = waData.current.air_quality;
+      if (aq.pm2_5 != null) return aq.pm2_5;
+    }
+    if (wbDaily && wbDaily.data && wbDaily.data[0] && wbDaily.data[0].aqi != null) {
+      return wbDaily.data[0].aqi;
+    }
+  } catch (e) {}
+  return null;
+}
+
 /* ───── MAIN WEATHER ROUTE ───── */
 
 app.get("/api/weather", async function (req, res) {
