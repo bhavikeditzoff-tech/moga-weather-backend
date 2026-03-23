@@ -14,6 +14,7 @@ const PIRATE_KEY = process.env.PIRATE_WEATHER_KEY;
 const OPENWEATHER_KEY = process.env.OPENWEATHER_KEY;
 const ACCUWEATHER_API_KEY = process.env.ACCUWEATHER_API_KEY;
 const METEOBLUE_API_KEY = process.env.METEOBLUE_API_KEY;
+const CHECKWX_API_KEY = process.env.CHECKWX_API_KEY;
 
 /* ───── CACHE ───── */
 
@@ -226,6 +227,21 @@ function accuPhraseToWMO(text) {
   return 2;
 }
 
+function owmCodeToWMO(c) {
+  if (!c) return 0;
+  var n = Number(c);
+  if (n >= 200 && n < 300) return 95;
+  if (n >= 300 && n < 400) return 51;
+  if (n >= 500 && n < 600) return 63;
+  if (n >= 600 && n < 700) return 73;
+  if (n >= 700 && n < 800) return 45;
+  if (n === 800) return 0;
+  if (n === 801) return 1;
+  if (n === 802) return 2;
+  if (n >= 803) return 3;
+  return 0;
+}
+
 /* ───── AQI / HELPERS ───── */
 
 function buildAQ(waData, wbDaily) {
@@ -407,6 +423,15 @@ async function fetchOpenMeteoDaily7(loc) {
   );
 }
 
+async function fetchOpenMeteoStorm(loc) {
+  return await sf(
+    "https://api.open-meteo.com/v1/forecast?latitude=" + loc.lat +
+      "&longitude=" + loc.lon +
+      "&hourly=cape,precipitation_probability&timezone=auto&forecast_days=1",
+    "OpenMeteo-Storm"
+  );
+}
+
 async function fetchVisualCrossing7(loc) {
   if (!VISUAL_CROSSING_KEY) return null;
   var now = new Date();
@@ -502,6 +527,27 @@ async function fetchMeteoblueCurrent(loc) {
       "&lat=" + loc.lat + "&lon=" + loc.lon + "&asl=0&format=json",
     "Meteoblue-Current"
   );
+}
+
+async function fetchCheckWX(loc) {
+  if (!CHECKWX_API_KEY) return null;
+  return await fetch(
+    "https://api.checkwx.com/metar/lat/" + loc.lat + "/lon/" + loc.lon + "/radius/50/decoded",
+    { headers: { "X-API-Key": CHECKWX_API_KEY } }
+  )
+    .then(function (r) {
+      if (!r.ok) {
+        return r.text().catch(function () { return ""; }).then(function (t) {
+          console.log("CheckWX HTTP " + r.status + ": " + t.substring(0, 400));
+          return null;
+        });
+      }
+      return r.json();
+    })
+    .catch(function (e) {
+      console.log("CheckWX ERR:", e.message);
+      return null;
+    });
 }
 
 /* ───── PARSERS ───── */
@@ -612,6 +658,115 @@ function parseMeteoblueCurrent(mbData) {
   }
 
   return out;
+}
+
+function parseCheckWXCeiling(cwx) {
+  if (!cwx || !cwx.data || !cwx.data.length) return null;
+
+  var metar = cwx.data[0];
+  if (!metar) return null;
+
+  if (metar.ceiling && metar.ceiling.feet != null) {
+    return metar.ceiling.feet;
+  }
+
+  if (metar.clouds && Array.isArray(metar.clouds)) {
+    for (var i = 0; i < metar.clouds.length; i++) {
+      var cl = metar.clouds[i];
+      var code = String(cl.code || cl.type || "").toUpperCase();
+      var baseFeet = first(cl.base_feet_agl, cl.base_feet, cl.altitude_feet, cl.altitude);
+      if ((code === "BKN" || code === "OVC" || code === "VV") && baseFeet != null) {
+        return Number(baseFeet);
+      }
+    }
+  }
+
+  return null;
+}
+
+function parseAccuPollen(accuData) {
+  if (!accuData || !accuData.DailyForecasts || !accuData.DailyForecasts.length) return null;
+  var day = accuData.DailyForecasts[0];
+  if (!day.AirAndPollen || !day.AirAndPollen.length) return null;
+
+  var pollenValues = [];
+  for (var i = 0; i < day.AirAndPollen.length; i++) {
+    var ap = day.AirAndPollen[i];
+    var name = String(ap.Name || "").toLowerCase();
+    if (
+      name.indexOf("tree") >= 0 ||
+      name.indexOf("grass") >= 0 ||
+      name.indexOf("ragweed") >= 0 ||
+      name.indexOf("mold") >= 0
+    ) {
+      if (ap.Value != null && !isNaN(ap.Value)) pollenValues.push(Number(ap.Value));
+    }
+  }
+
+  if (!pollenValues.length) return null;
+  return roundVal(avg(pollenValues));
+}
+
+function parseOpenMeteoStorm(omStorm) {
+  var out = {
+    precipitation_probability: null,
+    cape: null
+  };
+
+  if (!omStorm || !omStorm.hourly || !omStorm.hourly.time || !omStorm.hourly.time.length) return out;
+
+  var idx = 0;
+  var best = Infinity;
+  var now = Date.now();
+
+  for (var i = 0; i < omStorm.hourly.time.length; i++) {
+    var t = new Date(omStorm.hourly.time[i]).getTime();
+    var d = Math.abs(now - t);
+    if (d < best) {
+      best = d;
+      idx = i;
+    }
+  }
+
+  out.precipitation_probability = omStorm.hourly.precipitation_probability ? omStorm.hourly.precipitation_probability[idx] : null;
+  out.cape = omStorm.hourly.cape ? omStorm.hourly.cape[idx] : null;
+  return out;
+}
+
+function getCapeFactor(cape) {
+  if (cape == null || isNaN(cape)) return 0;
+  if (cape < 100) return 5;
+  if (cape < 250) return 15;
+  if (cape < 500) return 30;
+  if (cape < 1000) return 50;
+  if (cape < 2000) return 70;
+  return 90;
+}
+
+function getLightningBoost(wbCurrent) {
+  if (!wbCurrent || !wbCurrent.data || !wbCurrent.data.length) return 0;
+  var cur = wbCurrent.data[0];
+  if (cur.weather && cur.weather.code != null) {
+    var code = Number(cur.weather.code);
+    if (code >= 200 && code < 300) return 30;
+  }
+  return 0;
+}
+
+function computeStormProbability(precipProb, cloudCover, cape, lightningBoost) {
+  var p = first(precipProb, 0);
+  var c = first(cloudCover, 0);
+  var capeFactor = getCapeFactor(cape);
+
+  var stormProbability =
+    (p * 0.5) +
+    (c * 0.2) +
+    (capeFactor * 0.3);
+
+  stormProbability += first(lightningBoost, 0);
+
+  stormProbability = Math.max(0, Math.min(100, stormProbability));
+  return roundVal(stormProbability);
 }
 
 /* ───── HOURLY ───── */
@@ -945,10 +1100,12 @@ app.get("/api/weather", async function (req, res) {
       fetchOpenMeteoCurrent(loc),
       fetchOpenMeteoHourly(loc),
       fetchOpenMeteoDaily7(loc),
+      fetchOpenMeteoStorm(loc),
       fetchAccuForecast(loc),
       fetchVisualCrossingMonthly(loc),
       fetchVisualCrossing7(loc),
-      fetchMeteoblueCurrent(loc)
+      fetchMeteoblueCurrent(loc),
+      fetchCheckWX(loc)
     ]);
 
     var waData = results[0];
@@ -961,10 +1118,12 @@ app.get("/api/weather", async function (req, res) {
     var omCurrentData = results[7];
     var omHourlyData = results[8];
     var omDaily7 = results[9];
-    var accuData = results[10];
-    var vcMonthlyData = results[11];
-    var vc7 = results[12];
-    var meteoblueData = results[13];
+    var omStormData = results[10];
+    var accuData = results[11];
+    var vcMonthlyData = results[12];
+    var vc7 = results[13];
+    var meteoblueData = results[14];
+    var checkwxData = results[15];
 
     console.log(
       "API Status — WA:", !!waData,
@@ -977,10 +1136,12 @@ app.get("/api/weather", async function (req, res) {
       "OMC:", !!omCurrentData,
       "OMH:", !!omHourlyData,
       "OMD7:", !!omDaily7,
+      "OMS:", !!omStormData,
       "ACCU:", !!accuData,
       "VCM:", !!vcMonthlyData,
       "VC7:", !!vc7,
-      "MB:", !!meteoblueData
+      "MB:", !!meteoblueData,
+      "CWX:", !!checkwxData
     );
 
     if (!waData) {
@@ -994,6 +1155,9 @@ app.get("/api/weather", async function (req, res) {
     var tmCurrent = parseTomorrowCurrent(tmCurrentData);
     var tmHourly = parseTomorrowHourly(tmHourlyData, tz);
     var mbCurrent = parseMeteoblueCurrent(meteoblueData);
+    var checkwxCeilingFeet = parseCheckWXCeiling(checkwxData);
+    var accuPollen = parseAccuPollen(accuData);
+    var omStorm = parseOpenMeteoStorm(omStormData);
 
     var currentTemp = first(
       omCurrentData && omCurrentData.current ? omCurrentData.current.temperature_2m : null,
@@ -1036,19 +1200,27 @@ app.get("/api/weather", async function (req, res) {
     if (uv == null) uv = waCurr.uv;
 
     var realFeel = first(
-      tmCurrent.feelsLike,
       omCurrentData && omCurrentData.current ? omCurrentData.current.apparent_temperature : null,
+      tmCurrent.feelsLike,
       waCurr.feelslike_c,
       owData && owData.main ? owData.main.feels_like : null
+    );
+
+    var lightningBoost = getLightningBoost(wbCurrent);
+    var stormProbability = computeStormProbability(
+      first(omStorm.precipitation_probability, rainChance),
+      first(mbCurrent.cloudCover, tmCurrent.cloudCover),
+      omStorm.cape,
+      lightningBoost
     );
 
     var skyMetrics = {
       realfeel_shade: realFeel != null ? roundVal(realFeel - 3) : null,
       cloud_cover: roundVal(first(mbCurrent.cloudCover, tmCurrent.cloudCover)),
-      cloud_ceiling: roundVal(mbCurrent.cloudCeiling),
-      thunder_probability: null,
+      cloud_ceiling: checkwxCeilingFeet != null ? roundVal(checkwxCeilingFeet / 3280.84) : null,
+      thunder_probability: stormProbability,
       dew_point: roundVal(tmCurrent.dewPoint),
-      pollen_count: roundVal(first(tmCurrent.treePollen, tmCurrent.grassPollen, tmCurrent.weedPollen))
+      pollen_count: roundVal(accuPollen)
     };
 
     var dTime = [], dCode = [], dMax = [], dMin = [], dPrecip = [], dSunrise = [], dSunset = [], dUv = [];
@@ -1064,6 +1236,7 @@ app.get("/api/weather", async function (req, res) {
       dUv.push(dy.uv);
     }
 
+    // daylight tracker from WeatherAPI sunrise/sunset
     if (waData && waData.forecast && waData.forecast.forecastday && waData.forecast.forecastday.length) {
       var wf = waData.forecast.forecastday;
       if (wf[0] && wf[0].astro) {
@@ -1089,8 +1262,14 @@ app.get("/api/weather", async function (req, res) {
       },
       current: {
         temperature_c: roundVal(currentTemp),
-        weather_code: waCodeToWMO(waCurr.condition ? waCurr.condition.code : 1000),
-        condition_text: waCurr.condition ? waCurr.condition.text : null,
+        weather_code: first(
+          owData && owData.weather && owData.weather[0] ? owmCodeToWMO(owData.weather[0].id) : null,
+          waCodeToWMO(waCurr.condition ? waCurr.condition.code : 1000)
+        ),
+        condition_text: first(
+          owData && owData.weather && owData.weather[0] ? owData.weather[0].description : null,
+          waCurr.condition ? waCurr.condition.text : null
+        ),
         is_day: first(waCurr.is_day, 1),
         feelslike_c: roundVal(realFeel),
         humidity: humidity,
@@ -1125,6 +1304,16 @@ app.get("/api/weather", async function (req, res) {
         result.location.country = waLoc.country || "";
       }
     }
+
+    console.log("CheckWX ceiling feet:", checkwxCeilingFeet);
+    console.log("Accu pollen:", accuPollen);
+    console.log("Storm inputs:", {
+      precip_probability: first(omStorm.precipitation_probability, rainChance),
+      cloud_cover: first(mbCurrent.cloudCover, tmCurrent.cloudCover),
+      cape: omStorm.cape,
+      lightningBoost: lightningBoost,
+      final: stormProbability
+    });
 
     putC(cKey, result);
 
