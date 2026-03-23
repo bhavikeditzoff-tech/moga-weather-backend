@@ -720,7 +720,7 @@ function computeStormProbability(precipProb, cloudCover, cape, lightningBoost) {
 }
 /* ───── HOURLY ───── */
 
-function buildHourlyFromOpenMeteo(omHourlyData, currentTemp, owCurrentCodeForNow) {
+function buildHourlyFromOpenMeteo(omHourlyData, currentTemp, owCurrentCodeForNow, tz) {
   var out = {
     time: [],
     temperature_2m: [],
@@ -1221,7 +1221,8 @@ console.log("CheckWX ceiling parsed:", checkwxCeilingFeet);
   first(
     owData && owData.weather && owData.weather[0] ? owmCodeToWMO(owData.weather[0].id) : null,
     null
-  )
+  ),
+tz
 );
     var timePeriods = buildTimePeriodsFromHourly(hourly, prData, tz);
     var dailyArray = buildDaily(accuData, omDaily7, wbDaily, vc7);
