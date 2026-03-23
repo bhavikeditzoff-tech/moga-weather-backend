@@ -694,18 +694,21 @@ function getLightningBoost(wbCurrent) {
 function computeStormProbability(precipProb, cloudCover, cape, lightningBoost) {
   var p = first(precipProb, 0);
   var c = first(cloudCover, 0);
-  var capeFactor = getCapeFactor(cape);
+  var capeVal = first(cape, 0);
+  var capeFactor = getCapeFactor(capeVal);
+
+  if (p < 30 && capeVal < 500) {
+    return 0;
+  }
 
   var stormProbability =
-    (p * 0.5) +
-    (c * 0.2) +
+    (p * 0.6) +
+    (c * 0.1) +
     (capeFactor * 0.3);
 
-  stormProbability += first(lightningBoost, 0);
-  stormProbability = Math.max(0, Math.min(100, stormProbability));
+  stormProbability = Math.min(100, stormProbability);
   return roundVal(stormProbability);
 }
-
 /* ───── HOURLY ───── */
 
 function buildHourlyFromOpenMeteo(omHourlyData, currentTemp) {
