@@ -22,10 +22,12 @@ const GEMINI_KEY = process.env.GEMINI_API_KEY;
 var generalCache = {};
 var accuLocationCache = {};
 var accuForecastCache = {};
+var recommendationsCache = {};
 
 var GENERAL_CACHE_MS = 10 * 60 * 1000;
 var ACCU_LOCATION_CACHE_MS = 7 * 24 * 60 * 60 * 1000;
 var ACCU_FORECAST_CACHE_MS = 6 * 60 * 60 * 1000;
+var RECOMMENDATIONS_CACHE_MS = 60 * 60 * 1000; // 1 hour
 
 function getCached(store, key, maxAge) {
   var entry = store[key];
@@ -338,11 +340,7 @@ function parseTomorrowCurrent(tmData) {
 }
 
 function parseMeteoblueCurrent(mbData) {
-  var out = {
-    cloudCover: null,
-    cloudCeiling: null
-  };
-
+  var out = { cloudCover: null, cloudCeiling: null };
   if (!mbData) return out;
 
   if (mbData.data_1h && mbData.data_1h.cloudcover && mbData.data_1h.cloudcover.length) {
@@ -357,7 +355,6 @@ function parseMeteoblueCurrent(mbData) {
   if (mbData.data && mbData.data.cloud_ceiling && mbData.data.cloud_ceiling.length) {
     out.cloudCeiling = first(out.cloudCeiling, mbData.data.cloud_ceiling[0]);
   }
-
   return out;
 }
 
@@ -372,24 +369,19 @@ function parseCheckWXCeiling(cwx) {
 
   if (metar.clouds && Array.isArray(metar.clouds) && metar.clouds.length) {
     var fallbackFeet = null;
-
     for (var i = 0; i < metar.clouds.length; i++) {
       var cl = metar.clouds[i];
       var code = String(cl.code || cl.type || "").toUpperCase();
       var baseFeet = first(cl.base_feet_agl, cl.base_feet, cl.altitude_feet, cl.altitude, cl.feet);
-
       if ((code === "BKN" || code === "OVC" || code === "VV") && baseFeet != null) {
         return Number(baseFeet);
       }
-
       if (fallbackFeet == null && baseFeet != null) {
         fallbackFeet = Number(baseFeet);
       }
     }
-
     return fallbackFeet;
   }
-
   return null;
 }
 
@@ -411,17 +403,12 @@ function parseAccuPollen(accuData) {
       if (ap.Value != null && !isNaN(ap.Value)) pollenValues.push(Number(ap.Value));
     }
   }
-
   if (!pollenValues.length) return null;
   return roundVal(avg(pollenValues));
 }
 
 function parseOpenMeteoStorm(omStorm) {
-  var out = {
-    precipitation_probability: null,
-    cape: null
-  };
-
+  var out = { precipitation_probability: null, cape: null };
   if (!omStorm || !omStorm.hourly || !omStorm.hourly.time || !omStorm.hourly.time.length) return out;
 
   var idx = 0;
@@ -431,10 +418,7 @@ function parseOpenMeteoStorm(omStorm) {
   for (var i = 0; i < omStorm.hourly.time.length; i++) {
     var t = new Date(omStorm.hourly.time[i]).getTime();
     var d = Math.abs(now - t);
-    if (d < best) {
-      best = d;
-      idx = i;
-    }
+    if (d < best) { best = d; idx = i; }
   }
 
   out.precipitation_probability = omStorm.hourly.precipitation_probability ? omStorm.hourly.precipitation_probability[idx] : null;
@@ -459,15 +443,9 @@ function computeStormProbability(precipProb, cloudCover, cape) {
   var capeFactor = getCapeFactor(capeVal);
 
   // No storm possible if precip < 30% regardless of CAPE
-  if (p < 30) {
-    return 0;
-  }
+  if (p < 30) return 0;
 
-  var stormProbability =
-    (p * 0.6) +
-    (c * 0.1) +
-    (capeFactor * 0.3);
-
+  var stormProbability = (p * 0.6) + (c * 0.1) + (capeFactor * 0.3);
   stormProbability = Math.min(100, stormProbability);
   return roundVal(stormProbability);
 }
@@ -475,27 +453,17 @@ function computeStormProbability(precipProb, cloudCover, cape) {
 /* ───── HOURLY ───── */
 
 function buildHourlyFromOpenMeteo(omHourlyData, currentTemp, currentWeatherCode, tz) {
-  var out = {
-    time: [],
-    temperature_2m: [],
-    weather_code: [],
-    is_day: []
-  };
+  var out = { time: [], temperature_2m: [], weather_code: [], is_day: [] };
 
   if (!omHourlyData || !omHourlyData.hourly || !omHourlyData.hourly.time || !omHourlyData.hourly.time.length) {
     return out;
   }
 
   var h = omHourlyData.hourly;
-
   var now = new Date();
   var parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: tz,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    hourCycle: "h23"
+    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hourCycle: "h23"
   }).formatToParts(now);
 
   var yy = "", mm = "", dd = "", hh = "";
@@ -507,24 +475,16 @@ function buildHourlyFromOpenMeteo(omHourlyData, currentTemp, currentWeatherCode,
   }
 
   var currentHourKey = yy + "-" + mm + "-" + dd + "T" + hh;
-
   var startIdx = -1;
-  for (var i = 0; i < h.time.length; i++) {
-    if (String(h.time[i]).substring(0, 13) === currentHourKey) {
-      startIdx = i;
-      break;
-    }
-  }
 
+  for (var i = 0; i < h.time.length; i++) {
+    if (String(h.time[i]).substring(0, 13) === currentHourKey) { startIdx = i; break; }
+  }
   if (startIdx === -1) {
     for (var j = 0; j < h.time.length; j++) {
-      if (String(h.time[j]).substring(0, 13) >= currentHourKey) {
-        startIdx = j;
-        break;
-      }
+      if (String(h.time[j]).substring(0, 13) >= currentHourKey) { startIdx = j; break; }
     }
   }
-
   if (startIdx === -1) startIdx = 0;
 
   for (var k = startIdx; k < h.time.length && out.time.length < 24; k++) {
@@ -534,13 +494,8 @@ function buildHourlyFromOpenMeteo(omHourlyData, currentTemp, currentWeatherCode,
     out.is_day.push(h.is_day ? h.is_day[k] : 1);
   }
 
-  if (out.temperature_2m.length && currentTemp != null) {
-    out.temperature_2m[0] = roundVal(currentTemp);
-  }
-
-  if (out.weather_code.length && currentWeatherCode != null) {
-    out.weather_code[0] = currentWeatherCode;
-  }
+  if (out.temperature_2m.length && currentTemp != null) out.temperature_2m[0] = roundVal(currentTemp);
+  if (out.weather_code.length && currentWeatherCode != null) out.weather_code[0] = currentWeatherCode;
 
   return out;
 }
@@ -583,7 +538,6 @@ function buildTimePeriodsFromHourly(hourly, prData, tz) {
   var todayLocal = epochToLocalISO(nowEpoch, tz).substring(0, 10);
   var nowLocalHour = getLocalHour(nowEpoch, tz);
   var tmrwDate = epochToLocalISO(nowEpoch + 86400, tz).substring(0, 10);
-
   var result = [];
 
   for (var pi = 0; pi < periods.length; pi++) {
@@ -648,17 +602,12 @@ function buildDaily(accuData, omDaily7, wbDaily, vc7) {
     for (var i = 0; i < count; i++) {
       var d = list[i];
       var dateStr = d.Date ? new Date(d.Date).toISOString().split("T")[0] : null;
-
       var uvVal = null;
       if (d.AirAndPollen && d.AirAndPollen.length) {
         for (var p = 0; p < d.AirAndPollen.length; p++) {
-          if (d.AirAndPollen[p].Name === "UVIndex") {
-            uvVal = d.AirAndPollen[p].Value;
-            break;
-          }
+          if (d.AirAndPollen[p].Name === "UVIndex") { uvVal = d.AirAndPollen[p].Value; break; }
         }
       }
-
       out.push({
         date: dateStr,
         weather_code: accuPhraseToWMO(
@@ -676,14 +625,8 @@ function buildDaily(accuData, omDaily7, wbDaily, vc7) {
   }
 
   for (var idx = 5; idx < 7; idx++) {
-    var maxCandidates = [];
-    var minCandidates = [];
-    var condCandidates = [];
-    var precipCandidates = [];
-    var date = null;
-    var sunrise = null;
-    var sunset = null;
-    var uv = null;
+    var maxCandidates = [], minCandidates = [], condCandidates = [], precipCandidates = [];
+    var date = null, sunrise = null, sunset = null, uv = null;
 
     if (omDaily7 && omDaily7.daily && omDaily7.daily.time && omDaily7.daily.time[idx]) {
       date = omDaily7.daily.time[idx];
@@ -735,12 +678,11 @@ function buildDaily(accuData, omDaily7, wbDaily, vc7) {
   return out;
 }
 
-/* ───── MONTHLY = VC HISTORY + 7-DAY FUTURE ONLY ───── */
+/* ───── MONTHLY (Open-Meteo Archive) ───── */
 
 function buildMonthly(omMonthlyData, dailyArray) {
   var map = {};
 
-  // Past days this month from Open-Meteo archive
   if (omMonthlyData && omMonthlyData.daily && omMonthlyData.daily.time) {
     var d = omMonthlyData.daily;
     for (var i = 0; i < d.time.length; i++) {
@@ -754,7 +696,6 @@ function buildMonthly(omMonthlyData, dailyArray) {
     }
   }
 
-  // Future days from the 7-day forecast (already built)
   for (var j = 0; j < dailyArray.length; j++) {
     var dy = dailyArray[j];
     if (!dy.date) continue;
@@ -771,9 +712,18 @@ function buildMonthly(omMonthlyData, dailyArray) {
     return new Date(a.date) - new Date(b.date);
   });
 }
-/* ───── RECOMMENDATIONS ENGINE ───── */
+
+/* ───── RECOMMENDATIONS (Gemini AI) ───── */
 
 async function buildRecommendations(payload) {
+  // Cache key: location + condition + temp (changes meaningfully per hour at most)
+  var cacheKey = (payload.locationName || "") + "|" + (payload.conditionText || "") + "|" + (payload.currentTemp || "");
+  var cached = getCached(recommendationsCache, cacheKey, RECOMMENDATIONS_CACHE_MS);
+  if (cached) {
+    console.log("Recommendations cache hit:", cacheKey);
+    return cached;
+  }
+
   try {
     var prompt =
       "You are a friendly, conversational weather assistant. Based on the weather data below, " +
@@ -799,7 +749,7 @@ async function buildRecommendations(payload) {
       "- Sunset: " + (payload.sunsetText || "Unknown") + "\n";
 
     var response = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=" + GEMINI_KEY,
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + GEMINI_KEY,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -810,26 +760,40 @@ async function buildRecommendations(payload) {
       }
     );
 
-   if (!response.ok) {
-  var errText = await response.text();
-  console.log("Gemini error body:", errText);
-  throw new Error("Gemini HTTP " + response.status);
-}
+    if (!response.ok) {
+      var errText = await response.text();
+      console.log("Gemini error body:", errText);
+      throw new Error("Gemini HTTP " + response.status);
+    }
 
     var data = await response.json();
-    var text = data.candidates &&
-               data.candidates[0] &&
-               data.candidates[0].content &&
-               data.candidates[0].content.parts &&
-               data.candidates[0].content.parts[0]
-               ? data.candidates[0].content.parts[0].text : "";
+    var text =
+      data.candidates &&
+      data.candidates[0] &&
+      data.candidates[0].content &&
+      data.candidates[0].content.parts &&
+      data.candidates[0].content.parts[0]
+        ? data.candidates[0].content.parts[0].text
+        : "";
 
     // Strip markdown fences if present
     text = text.replace(/```json|```/g, "").trim();
 
     var parsed = JSON.parse(text);
-    if (Array.isArray(parsed) && parsed.length) {
-      return parsed.slice(0, 8);
+
+    // Flatten if Gemini wraps in extra array
+    if (Array.isArray(parsed) && Array.isArray(parsed[0])) parsed = parsed[0];
+
+    // Extract strings if Gemini returns objects
+    parsed = parsed.map(function (r) {
+      return typeof r === "string" ? r : (r.text || r.recommendation || r.message || JSON.stringify(r));
+    });
+
+    if (parsed.length) {
+      var result = parsed.slice(0, 8);
+      setCached(recommendationsCache, cacheKey, result);
+      console.log("Gemini recommendations OK:", result.length, "recs for", payload.locationName);
+      return result;
     }
   } catch (e) {
     console.log("Gemini recommendations ERR:", e.message);
@@ -847,6 +811,8 @@ function buildRecommendationsFallback(payload) {
   var aqi = payload.aqi;
   var wind = payload.wind;
   var thunder = payload.thunderProbability;
+  var humidity = payload.humidity;
+  var visibility = payload.visibilityKm;
 
   if (temp != null) {
     if (temp >= 35) recs.push("It's extremely hot outside — avoid long exposure and stay hydrated.");
@@ -855,9 +821,14 @@ function buildRecommendationsFallback(payload) {
     else recs.push("The temperature feels comfortable for most outdoor activity.");
   }
   if (rain != null && rain >= 70) recs.push("Rain is likely — carrying an umbrella is a good idea.");
+  else if (rain != null && rain >= 40) recs.push("There's a fair chance of rain, so keep backup plans ready.");
   if (uv != null && uv >= 8) recs.push("UV is very strong — sunscreen and shade are strongly recommended.");
+  else if (uv != null && uv >= 5) recs.push("UV is moderate — consider sunscreen for extended outdoor time.");
   if (aqi != null && aqi > 150) recs.push("Air quality is poor — reduce long outdoor exposure if possible.");
+  else if (aqi != null && aqi > 80) recs.push("Air quality is moderate — sensitive individuals should be cautious.");
   if (wind != null && wind >= 30) recs.push("It's fairly windy — secure light items and expect breezy conditions.");
+  if (humidity != null && humidity >= 80) recs.push("Humidity is high — it may feel sticky outdoors.");
+  if (visibility != null && visibility <= 2) recs.push("Visibility is poor — drive carefully.");
   if (thunder != null && thunder >= 60) recs.push("Thunderstorm potential is high — avoid exposed outdoor areas.");
   if (!recs.length) recs.push("Weather looks fairly stable right now — enjoy your day!");
   return recs;
@@ -881,36 +852,25 @@ async function resolveIp() {
   } catch (e) {
     console.log("resolveIp ERR:", e.message);
   }
-  // Fallback: London
   return { lat: 51.5074, lon: -0.1278, name: "London", region: "England", country: "United Kingdom", key: null };
 }
 
 async function resolveLoc(query) {
-  // coords passed directly
   if (query.lat != null && query.lon != null) {
     var lat = parseFloat(query.lat);
     var lon = parseFloat(query.lon);
-    // reverse-geocode with WeatherAPI to get a clean name
     try {
       var r = await sf(
         "https://api.weatherapi.com/v1/search.json?key=" + WEATHERAPI_KEY + "&q=" + lat + "," + lon,
         "ResolveLoc-coords"
       );
       if (r && r.length) {
-        return {
-          lat: lat,
-          lon: lon,
-          name: r[0].name || "",
-          region: r[0].region || "",
-          country: r[0].country || "",
-          key: null
-        };
+        return { lat: lat, lon: lon, name: r[0].name || "", region: r[0].region || "", country: r[0].country || "", key: null };
       }
     } catch (e) {}
     return { lat: lat, lon: lon, name: "", region: "", country: "", key: null };
   }
 
-  // city name search
   if (query.city) {
     try {
       var results = await sf(
@@ -919,8 +879,7 @@ async function resolveLoc(query) {
       );
       if (results && results.length) {
         return {
-          lat: results[0].lat,
-          lon: results[0].lon,
+          lat: results[0].lat, lon: results[0].lon,
           name: results[0].name || query.city,
           region: results[0].region || "",
           country: results[0].country || "",
@@ -988,8 +947,7 @@ function fetchOpenWeather(loc) {
 function fetchOpenMeteoCurrent(loc) {
   return sf(
     "https://api.open-meteo.com/v1/forecast?latitude=" + loc.lat + "&longitude=" + loc.lon +
-    "&current=temperature_2m,apparent_temperature,weather_code,is_day" +
-    "&timezone=auto",
+    "&current=temperature_2m,apparent_temperature,weather_code,is_day&timezone=auto",
     "OMCurrent"
   );
 }
@@ -997,8 +955,7 @@ function fetchOpenMeteoCurrent(loc) {
 function fetchOpenMeteoHourly(loc) {
   return sf(
     "https://api.open-meteo.com/v1/forecast?latitude=" + loc.lat + "&longitude=" + loc.lon +
-    "&hourly=temperature_2m,weather_code,is_day" +
-    "&forecast_days=2&timezone=auto",
+    "&hourly=temperature_2m,weather_code,is_day&forecast_days=2&timezone=auto",
     "OMHourly"
   );
 }
@@ -1015,8 +972,7 @@ function fetchOpenMeteoDaily7(loc) {
 function fetchOpenMeteoStorm(loc) {
   return sf(
     "https://api.open-meteo.com/v1/forecast?latitude=" + loc.lat + "&longitude=" + loc.lon +
-    "&hourly=precipitation_probability,cape" +
-    "&forecast_days=1&timezone=auto",
+    "&hourly=precipitation_probability,cape&forecast_days=1&timezone=auto",
     "OMStorm"
   );
 }
@@ -1062,22 +1018,22 @@ function fetchVisualCrossingMonthly(loc) {
   var firstOfMonth = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().split("T")[0];
   var todayStr = today.toISOString().split("T")[0];
 
-  // Use Open-Meteo Archive API — free, no rate limits
   return sf(
     "https://archive-api.open-meteo.com/v1/archive?latitude=" + loc.lat +
     "&longitude=" + loc.lon +
     "&start_date=" + firstOfMonth +
     "&end_date=" + todayStr +
-    "&daily=temperature_2m_max,temperature_2m_min,weather_code" +
-    "&timezone=auto",
+    "&daily=temperature_2m_max,temperature_2m_min,weather_code&timezone=auto",
     "OMMonthly"
   );
 }
+
 function fetchVisualCrossing7(loc) {
   return sf(
     "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/" +
     loc.lat + "," + loc.lon +
-    "?key=" + VISUAL_CROSSING_KEY + "&unitGroup=metric&include=days&elements=datetime,tempmax,tempmin,icon,conditions,precipprob,sunrise,sunset,uvindex&forecast_days=7",
+    "?key=" + VISUAL_CROSSING_KEY + "&unitGroup=metric&include=days" +
+    "&elements=datetime,tempmax,tempmin,icon,conditions,precipprob,sunrise,sunset,uvindex&forecast_days=7",
     "VC7"
   );
 }
@@ -1212,13 +1168,7 @@ app.get("/api/weather", async function (req, res) {
     var currentIsDay = first(waCurr.is_day, getIsDayNow(tz));
     var conditionText = getWeatherText(weatherCode, currentIsDay);
 
-    var hourly = buildHourlyFromOpenMeteo(
-      omHourlyData,
-      currentTemp,
-      weatherCode,
-      tz
-    );
-
+    var hourly = buildHourlyFromOpenMeteo(omHourlyData, currentTemp, weatherCode, tz);
     var timePeriods = buildTimePeriodsFromHourly(hourly, prData, tz);
     var dailyArray = buildDaily(accuData, omDaily7, wbDaily, vc7);
     var monthly = buildMonthly(vcMonthlyData, dailyArray);
@@ -1233,9 +1183,7 @@ app.get("/api/weather", async function (req, res) {
         rainChance = Math.round(prData.daily.data[0].precipProbability * 100);
       }
     }
-    if (rainChance == null && dailyArray.length) {
-      rainChance = dailyArray[0].precip_chance;
-    }
+    if (rainChance == null && dailyArray.length) rainChance = dailyArray[0].precip_chance;
 
     var visibility = null;
     if (owData && owData.visibility != null) visibility = owData.visibility;
@@ -1299,9 +1247,9 @@ app.get("/api/weather", async function (req, res) {
     }
 
     var recommendations = await buildRecommendations({
-  locationName: loc.name,
-  conditionText: conditionText,
-  dewPoint: skyMetrics.dew_point,
+      locationName: loc.name,
+      conditionText: conditionText,
+      dewPoint: skyMetrics.dew_point,
       currentTemp: roundVal(currentTemp),
       realFeel: roundVal(realFeel),
       rainChance: rainChance,
@@ -1371,7 +1319,10 @@ app.get("/api/search", async function (req, res) {
     var q = (req.query.q || "").trim();
     if (!q) return res.json({ results: [] });
 
-    var wa = await sf("https://api.weatherapi.com/v1/search.json?key=" + WEATHERAPI_KEY + "&q=" + encodeURIComponent(q), "Search");
+    var wa = await sf(
+      "https://api.weatherapi.com/v1/search.json?key=" + WEATHERAPI_KEY + "&q=" + encodeURIComponent(q),
+      "Search"
+    );
     if (wa && wa.length) {
       return res.json({
         results: wa.map(function (i) {
