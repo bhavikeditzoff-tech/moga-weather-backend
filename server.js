@@ -15,6 +15,7 @@ const OPENWEATHER_KEY = process.env.OPENWEATHER_KEY;
 const ACCUWEATHER_API_KEY = process.env.ACCUWEATHER_API_KEY;
 const METEOBLUE_API_KEY = process.env.METEOBLUE_API_KEY;
 const CHECKWX_API_KEY = process.env.CHECKWX_API_KEY;
+const GEMINI_KEY = process.env.GEMINI_API_KEY;
 
 /* ───── CACHE ───── */
 
@@ -736,27 +737,24 @@ function buildDaily(accuData, omDaily7, wbDaily, vc7) {
 
 /* ───── MONTHLY = VC HISTORY + 7-DAY FUTURE ONLY ───── */
 
-function buildMonthly(vcMonthlyData, dailyArray) {
+function buildMonthly(omMonthlyData, dailyArray) {
   var map = {};
-  var today = new Date().toISOString().split("T")[0];
 
-  if (vcMonthlyData && vcMonthlyData.days) {
-    for (var i = 0; i < vcMonthlyData.days.length; i++) {
-      var d = vcMonthlyData.days[i];
-      if (!d.datetime) continue;
-
-      if (d.datetime <= today) {
-        map[d.datetime] = {
-          date: d.datetime,
-          weather_code: vcToWMO(first(d.icon, d.conditions, "")),
-          max_temp: d.tempmax != null ? d.tempmax : null,
-          min_temp: d.tempmin != null ? d.tempmin : null,
-          available: true
-        };
-      }
+  // Past days this month from Open-Meteo archive
+  if (omMonthlyData && omMonthlyData.daily && omMonthlyData.daily.time) {
+    var d = omMonthlyData.daily;
+    for (var i = 0; i < d.time.length; i++) {
+      map[d.time[i]] = {
+        date: d.time[i],
+        weather_code: d.weather_code ? d.weather_code[i] : 0,
+        max_temp: d.temperature_2m_max ? d.temperature_2m_max[i] : null,
+        min_temp: d.temperature_2m_min ? d.temperature_2m_min[i] : null,
+        available: true
+      };
     }
   }
 
+  // Future days from the 7-day forecast (already built)
   for (var j = 0; j < dailyArray.length; j++) {
     var dy = dailyArray[j];
     if (!dy.date) continue;
@@ -773,95 +771,94 @@ function buildMonthly(vcMonthlyData, dailyArray) {
     return new Date(a.date) - new Date(b.date);
   });
 }
-
 /* ───── RECOMMENDATIONS ENGINE ───── */
 
-function buildRecommendations(payload) {
-  var recs = [];
+async function buildRecommendations(payload) {
+  try {
+    var prompt =
+      "You are a friendly, conversational weather assistant. Based on the weather data below, " +
+      "write 6 to 8 short, natural-sounding recommendations for someone planning their day. " +
+      "Each recommendation should be a single sentence. Be specific, warm, and practical — " +
+      "like a knowledgeable friend giving advice, not a weather report. " +
+      "Vary the tone: some can be casual, some cautionary, some encouraging. " +
+      "Return ONLY a JSON array of strings, no preamble, no markdown, no extra text.\n\n" +
+      "Weather data:\n" +
+      "- Location: " + (payload.locationName || "Unknown") + "\n" +
+      "- Temperature: " + (payload.currentTemp != null ? payload.currentTemp + "°C" : "Unknown") + "\n" +
+      "- Feels like: " + (payload.realFeel != null ? payload.realFeel + "°C" : "Unknown") + "\n" +
+      "- Condition: " + (payload.conditionText || "Unknown") + "\n" +
+      "- Humidity: " + (payload.humidity != null ? payload.humidity + "%" : "Unknown") + "\n" +
+      "- Wind speed: " + (payload.wind != null ? payload.wind + " km/h" : "Unknown") + "\n" +
+      "- Rain chance: " + (payload.rainChance != null ? payload.rainChance + "%" : "Unknown") + "\n" +
+      "- UV index: " + (payload.uv != null ? payload.uv : "Unknown") + "\n" +
+      "- Air quality (AQI): " + (payload.aqi != null ? payload.aqi : "Unknown") + "\n" +
+      "- Visibility: " + (payload.visibilityKm != null ? payload.visibilityKm.toFixed(1) + " km" : "Unknown") + "\n" +
+      "- Cloud cover: " + (payload.cloudCover != null ? payload.cloudCover + "%" : "Unknown") + "\n" +
+      "- Thunderstorm probability: " + (payload.thunderProbability != null ? payload.thunderProbability + "%" : "Unknown") + "\n" +
+      "- Dew point: " + (payload.dewPoint != null ? payload.dewPoint + "°C" : "Unknown") + "\n" +
+      "- Sunset: " + (payload.sunsetText || "Unknown") + "\n";
 
+    var response = await fetch(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + GEMINI_KEY,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.8, maxOutputTokens: 1024 }
+        })
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error("Gemini HTTP " + response.status);
+    }
+
+    var data = await response.json();
+    var text = data.candidates &&
+               data.candidates[0] &&
+               data.candidates[0].content &&
+               data.candidates[0].content.parts &&
+               data.candidates[0].content.parts[0]
+               ? data.candidates[0].content.parts[0].text : "";
+
+    // Strip markdown fences if present
+    text = text.replace(/```json|```/g, "").trim();
+
+    var parsed = JSON.parse(text);
+    if (Array.isArray(parsed) && parsed.length) {
+      return parsed.slice(0, 8);
+    }
+  } catch (e) {
+    console.log("Gemini recommendations ERR:", e.message);
+  }
+
+  // Fallback to deterministic if Gemini fails
+  return buildRecommendationsFallback(payload);
+}
+
+function buildRecommendationsFallback(payload) {
+  var recs = [];
   var temp = payload.currentTemp;
-  var feels = payload.realFeel;
   var rain = payload.rainChance;
   var uv = payload.uv;
   var aqi = payload.aqi;
-  var humidity = payload.humidity;
   var wind = payload.wind;
-  var visibility = payload.visibilityKm;
   var thunder = payload.thunderProbability;
-  var cloud = payload.cloudCover;
-  var sunset = payload.sunsetText;
 
   if (temp != null) {
-    if (temp >= 35) recs.push("It’s extremely hot outside — avoid long exposure and stay hydrated.");
+    if (temp >= 35) recs.push("It's extremely hot outside — avoid long exposure and stay hydrated.");
     else if (temp >= 30) recs.push("A warm day ahead — light clothing and water will help.");
-    else if (temp <= 12) recs.push("It’s fairly cool — a light jacket may feel comfortable.");
+    else if (temp <= 12) recs.push("It's fairly cool — a light jacket may feel comfortable.");
     else recs.push("The temperature feels comfortable for most outdoor activity.");
   }
-
-  if (feels != null && temp != null) {
-    if (feels - temp >= 3) recs.push("It feels warmer than the actual temperature, so the heat may be stronger than expected.");
-    else if (temp - feels >= 3) recs.push("It may feel cooler than the actual air temperature thanks to shade or airflow.");
-  }
-
-  if (rain != null) {
-    if (rain >= 70) recs.push("Rain is likely — carrying an umbrella is a good idea.");
-    else if (rain >= 40) recs.push("There is a fair chance of rain, so keep backup plans ready.");
-    else recs.push("Rain risk is low, so outdoor plans should be relatively safe.");
-  }
-
-  if (uv != null) {
-    if (uv >= 8) recs.push("UV is very strong — sunscreen and shade are strongly recommended.");
-    else if (uv >= 5) recs.push("UV is moderate to high, so eye and skin protection may help.");
-  }
-
-  if (aqi != null) {
-    if (aqi > 150) recs.push("Air quality is poor — reduce long outdoor exposure if possible.");
-    else if (aqi > 80) recs.push("Air quality is moderate — sensitive people should be cautious.");
-    else recs.push("Air quality looks acceptable for normal outdoor plans.");
-  }
-
-  if (humidity != null) {
-    if (humidity >= 80) recs.push("Humidity is high, so it may feel sticky outdoors.");
-    else if (humidity <= 30) recs.push("The air is dry — drinking enough water may help.");
-  }
-
-  if (wind != null && wind >= 30) {
-    recs.push("It’s fairly windy — secure light items and expect breezy conditions.");
-  }
-
-  if (visibility != null) {
-    if (visibility <= 2) recs.push("Visibility is poor — travel carefully if you’re driving.");
-    else if (visibility <= 5) recs.push("Visibility is somewhat reduced, so extra caution may help during travel.");
-  }
-
-  if (cloud != null) {
-    if (cloud >= 80) recs.push("Skies are heavily clouded, so sunlight will stay limited.");
-    else if (cloud <= 20) recs.push("Skies are mostly clear — great for outdoor views and photos.");
-  }
-
-  if (thunder != null) {
-    if (thunder >= 60) recs.push("Thunderstorm potential is high — avoid exposed outdoor areas if conditions worsen.");
-    else if (thunder >= 30) recs.push("There is some thunderstorm risk, so keep an eye on changing conditions.");
-  }
-
-  if (sunset) {
-    recs.push("Sunset is around " + sunset + ", so late-evening plans should account for fading daylight.");
-  }
-
-  var unique = [];
-  var seen = {};
-  for (var i = 0; i < recs.length; i++) {
-    if (!seen[recs[i]]) {
-      unique.push(recs[i]);
-      seen[recs[i]] = true;
-    }
-  }
-
-  if (!unique.length) {
-    unique.push("Weather looks fairly stable right now, so normal plans should be comfortable.");
-  }
-
-  return unique.slice(0, 8);
+  if (rain != null && rain >= 70) recs.push("Rain is likely — carrying an umbrella is a good idea.");
+  if (uv != null && uv >= 8) recs.push("UV is very strong — sunscreen and shade are strongly recommended.");
+  if (aqi != null && aqi > 150) recs.push("Air quality is poor — reduce long outdoor exposure if possible.");
+  if (wind != null && wind >= 30) recs.push("It's fairly windy — secure light items and expect breezy conditions.");
+  if (thunder != null && thunder >= 60) recs.push("Thunderstorm potential is high — avoid exposed outdoor areas.");
+  if (!recs.length) recs.push("Weather looks fairly stable right now — enjoy your day!");
+  return recs;
 }
 
 /* ───── LOCATION RESOLUTION ───── */
@@ -1062,14 +1059,18 @@ function fetchVisualCrossingMonthly(loc) {
   var today = new Date();
   var firstOfMonth = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().split("T")[0];
   var todayStr = today.toISOString().split("T")[0];
+
+  // Use Open-Meteo Archive API — free, no rate limits
   return sf(
-    "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/" +
-    loc.lat + "," + loc.lon + "/" + firstOfMonth + "/" + todayStr +
-    "?key=" + VISUAL_CROSSING_KEY + "&unitGroup=metric&include=days&elements=datetime,tempmax,tempmin,icon,conditions",
-    "VCMonthly"
+    "https://archive-api.open-meteo.com/v1/archive?latitude=" + loc.lat +
+    "&longitude=" + loc.lon +
+    "&start_date=" + firstOfMonth +
+    "&end_date=" + todayStr +
+    "&daily=temperature_2m_max,temperature_2m_min,weather_code" +
+    "&timezone=auto",
+    "OMMonthly"
   );
 }
-
 function fetchVisualCrossing7(loc) {
   return sf(
     "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/" +
@@ -1295,7 +1296,10 @@ app.get("/api/weather", async function (req, res) {
       }
     }
 
-    var recommendations = buildRecommendations({
+    var recommendations = await buildRecommendations({
+  locationName: loc.name,
+  conditionText: conditionText,
+  dewPoint: skyMetrics.dew_point,
       currentTemp: roundVal(currentTemp),
       realFeel: roundVal(realFeel),
       rainChance: rainChance,
