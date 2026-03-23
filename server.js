@@ -938,8 +938,11 @@ app.get("/api/weather", async function (req, res) {
     var tz = waLoc.tz_id || (omCurrentData ? omCurrentData.timezone : null) || "UTC";
 
     var tmCurrent = parseTomorrowCurrent(tmCurrentData);
+    console.log("Tomorrow raw:", JSON.stringify(tmCurrentData).substring(0, 1500));
+    console.log("Tomorrow parsed:", tmCurrent);
     var mbCurrent = parseMeteoblueCurrent(meteoblueData);
-
+    console.log("Meteoblue raw:", JSON.stringify(meteoblueData).substring(0, 1500));
+    console.log("Meteoblue parsed:", mbCurrent);
     var hourly = buildHourlyFromPirateAndWB(wbCurrent, prData, tz);
 
     var currentTemp = first(
@@ -1001,7 +1004,7 @@ app.get("/api/weather", async function (req, res) {
       dew_point: tmCurrent.dewPoint,
       pollen_count: first(tmCurrent.treePollen, tmCurrent.grassPollen, tmCurrent.weedPollen)
     };
-
+    console.log("Sky metrics final:", skyMetrics);
     var dTime = [], dCode = [], dMax = [], dMin = [], dPrecip = [], dSunrise = [], dSunset = [], dUv = [];
     for (var i = 0; i < dailyArray.length; i++) {
       var dy = dailyArray[i];
