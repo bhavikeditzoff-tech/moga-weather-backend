@@ -84,7 +84,9 @@ function sf(url, label) {
       return null;
     });
 }
-
+function roundVal(v) {
+  return v == null || isNaN(v) ? null : Math.round(v);
+}
 function c12to24(t) {
   if (!t) return "00:00:00";
   var p = t.split(" ");
@@ -946,8 +948,8 @@ app.get("/api/weather", async function (req, res) {
     var hourly = buildHourlyFromPirateAndWB(wbCurrent, prData, tz);
 
     var currentTemp = first(
-      omCurrentData && omCurrentData.current ? omCurrentData.current.temperature_2m : null,
       tmCurrent.temp,
+      omCurrentData && omCurrentData.current ? omCurrentData.current.temperature_2m : null,
       hourly.temperature_2m && hourly.temperature_2m.length ? hourly.temperature_2m[0] : null,
       wbCurrent && wbCurrent.data && wbCurrent.data[0] ? first(wbCurrent.data[0].temp, wbCurrent.data[0].app_temp) : null,
       owData && owData.main ? owData.main.temp : null,
@@ -955,7 +957,7 @@ app.get("/api/weather", async function (req, res) {
     );
 
     if (hourly.temperature_2m && hourly.temperature_2m.length && currentTemp != null) {
-      hourly.temperature_2m[0] = currentTemp;
+      hourly.temperature_2m[0] = roundVal(currentTemp);
     }
 
     var timePeriods = buildTimePeriodsFromHourly(hourly, prData, tz);
@@ -990,19 +992,19 @@ app.get("/api/weather", async function (req, res) {
     if (uv == null) uv = waCurr.uv;
 
     var realFeel = first(
-      omCurrentData && omCurrentData.current ? omCurrentData.current.apparent_temperature : null,
       tmCurrent.feelsLike,
+      omCurrentData && omCurrentData.current ? omCurrentData.current.apparent_temperature : null,
       waCurr.feelslike_c,
       owData && owData.main ? owData.main.feels_like : null
     );
 
     var skyMetrics = {
-      realfeel_shade: realFeel != null ? Math.round((realFeel - 3) * 10) / 10 : null,
-      cloud_cover: first(mbCurrent.cloudCover, tmCurrent.cloudCover),
-      cloud_ceiling: mbCurrent.cloudCeiling,
+      realfeel_shade: realFeel != null ? roundVal(realFeel - 3) : null,
+      cloud_cover: roundVal(first(mbCurrent.cloudCover, tmCurrent.cloudCover)),
+      cloud_ceiling: roundVal(mbCurrent.cloudCeiling),
       thunder_probability: null,
-      dew_point: tmCurrent.dewPoint,
-      pollen_count: first(tmCurrent.treePollen, tmCurrent.grassPollen, tmCurrent.weedPollen)
+      dew_point: roundVal(tmCurrent.dewPoint),
+      pollen_count: roundVal(first(tmCurrent.treePollen, tmCurrent.grassPollen, tmCurrent.weedPollen))
     };
     console.log("Sky metrics final:", skyMetrics);
     var dTime = [], dCode = [], dMax = [], dMin = [], dPrecip = [], dSunrise = [], dSunset = [], dUv = [];
@@ -1043,11 +1045,11 @@ app.get("/api/weather", async function (req, res) {
         timezone: tz
       },
       current: {
-        temperature_c: currentTemp,
+        temperature_c: roundVal(currentTemp),
         weather_code: waCodeToWMO(waCurr.condition ? waCurr.condition.code : 1000),
         condition_text: waCurr.condition ? waCurr.condition.text : null,
         is_day: first(waCurr.is_day, 1),
-        feelslike_c: realFeel,
+        feelslike_c: roundVal(realFeel),
         humidity: humidity,
         wind_kph: first(waCurr.wind_kph),
         wind_degree: first(waCurr.wind_degree),
