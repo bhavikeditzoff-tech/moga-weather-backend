@@ -74,15 +74,20 @@ function roundVal(v) {
 }
 
 function avg(nums) {
-  var clean = nums.filter(function (n) { return n != null && !isNaN(n); });
+  var clean = nums.filter(function (n) {
+    return n != null && !isNaN(n);
+  });
   if (!clean.length) return null;
-  return clean.reduce(function (a, b) { return a + b; }, 0) / clean.length;
+  return clean.reduce(function (a, b) {
+    return a + b;
+  }, 0) / clean.length;
 }
 
 function majority(values) {
   var counts = {};
   var best = null;
   var max = -1;
+
   for (var i = 0; i < values.length; i++) {
     var v = values[i];
     if (v == null) continue;
@@ -99,7 +104,9 @@ function sf(url, label) {
   return fetch(url)
     .then(function (r) {
       if (!r.ok) {
-        return r.text().catch(function () { return ""; }).then(function (t) {
+        return r.text().catch(function () {
+          return "";
+        }).then(function (t) {
           console.log(label + " HTTP " + r.status + ": " + t.substring(0, 500));
           return null;
         });
@@ -690,23 +697,13 @@ function getCapeFactor(cape) {
   return 90;
 }
 
-function getLightningBoost(wbCurrent) {
-  if (!wbCurrent || !wbCurrent.data || !wbCurrent.data.length) return 0;
-  var cur = wbCurrent.data[0];
-  if (cur.weather && cur.weather.code != null) {
-    var code = Number(cur.weather.code);
-    if (code >= 200 && code < 300) return 30;
-  }
-  return 0;
-}
-
-function computeStormProbability(precipProb, cloudCover, cape, lightningBoost) {
+function computeStormProbability(precipProb, cloudCover, cape) {
   var p = first(precipProb, 0);
   var c = first(cloudCover, 0);
   var capeVal = first(cape, 0);
   var capeFactor = getCapeFactor(capeVal);
 
-  if (p < 30 && capeVal < 500) {
+  if (p < 10 && capeVal < 500) {
     return 0;
   }
 
@@ -718,6 +715,7 @@ function computeStormProbability(precipProb, cloudCover, cape, lightningBoost) {
   stormProbability = Math.min(100, stormProbability);
   return roundVal(stormProbability);
 }
+
 /* ───── HOURLY ───── */
 
 function buildHourlyFromOpenMeteo(omHourlyData, currentTemp, owCurrentCodeForNow, tz) {
@@ -734,7 +732,6 @@ function buildHourlyFromOpenMeteo(omHourlyData, currentTemp, owCurrentCodeForNow
 
   var h = omHourlyData.hourly;
 
-  // Current local date/hour in target timezone
   var now = new Date();
   var parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: tz,
@@ -755,7 +752,6 @@ function buildHourlyFromOpenMeteo(omHourlyData, currentTemp, owCurrentCodeForNow
 
   var currentHourKey = yy + "-" + mm + "-" + dd + "T" + hh;
 
-  // Find exact local-hour match first
   var startIdx = -1;
   for (var i = 0; i < h.time.length; i++) {
     if (String(h.time[i]).substring(0, 13) === currentHourKey) {
@@ -764,7 +760,6 @@ function buildHourlyFromOpenMeteo(omHourlyData, currentTemp, owCurrentCodeForNow
     }
   }
 
-  // If exact hour not found, fallback to nearest by string order
   if (startIdx === -1) {
     for (var j = 0; j < h.time.length; j++) {
       if (String(h.time[j]).substring(0, 13) >= currentHourKey) {
@@ -786,14 +781,13 @@ function buildHourlyFromOpenMeteo(omHourlyData, currentTemp, owCurrentCodeForNow
   if (out.temperature_2m.length && currentTemp != null) {
     out.temperature_2m[0] = roundVal(currentTemp);
   }
-  // Make "Now" condition match OpenWeather current condition
   if (out.weather_code.length && owCurrentCodeForNow != null) {
     out.weather_code[0] = owCurrentCodeForNow;
   }
-  console.log("Hourly currentHourKey:", currentHourKey, "startIdx:", startIdx, "firstHourly:", out.time[0]);
 
   return out;
 }
+
 /* ───── TIME PERIODS ───── */
 
 function buildTimePeriodsFromHourly(hourly, prData, tz) {
@@ -1113,25 +1107,7 @@ function buildRecommendations(payload) {
 
   return unique.slice(0, 8);
 }
-function buildAQ(waData, wbDaily) {
-  var values = [];
 
-  if (waData && waData.current && waData.current.air_quality) {
-    var pm = waData.current.air_quality.pm2_5;
-    if (pm != null && !isNaN(pm)) values.push(pm);
-  }
-
-  if (wbDaily && wbDaily.data && wbDaily.data[0]) {
-    var aqi = wbDaily.data[0].aqi;
-    if (aqi != null && !isNaN(aqi)) values.push(aqi * 0.3);
-  }
-
-  if (!values.length) return null;
-
-  return Math.round((values.reduce(function (a, b) {
-    return a + b;
-  }, 0) / values.length) * 10) / 10;
-}
 /* ───── MAIN WEATHER ROUTE ───── */
 
 app.get("/api/weather", async function (req, res) {
@@ -1202,8 +1178,6 @@ app.get("/api/weather", async function (req, res) {
     var tmCurrent = parseTomorrowCurrent(tmCurrentData);
     var mbCurrent = parseMeteoblueCurrent(meteoblueData);
     var checkwxCeilingFeet = parseCheckWXCeiling(checkwxData);
-console.log("CheckWX raw:", JSON.stringify(checkwxData).substring(0, 1500));
-console.log("CheckWX ceiling parsed:", checkwxCeilingFeet);
     var accuPollen = parseAccuPollen(accuData);
     var omStorm = parseOpenMeteoStorm(omStormData);
 
@@ -1215,15 +1189,18 @@ console.log("CheckWX ceiling parsed:", checkwxCeilingFeet);
       waCurr.temp_c
     );
 
-   var hourly = buildHourlyFromOpenMeteo(
-  omHourlyData,
-  currentTemp,
-  first(
-    owData && owData.weather && owData.weather[0] ? owmCodeToWMO(owData.weather[0].id) : null,
-    null
-  ),
-tz
-);
+    var weatherCode = first(
+      owData && owData.weather && owData.weather[0] ? owmCodeToWMO(owData.weather[0].id) : null,
+      waCodeToWMO(waCurr.condition ? waCurr.condition.code : 1000)
+    );
+
+    var hourly = buildHourlyFromOpenMeteo(
+      omHourlyData,
+      currentTemp,
+      weatherCode,
+      tz
+    );
+
     var timePeriods = buildTimePeriodsFromHourly(hourly, prData, tz);
     var dailyArray = buildDaily(accuData, omDaily7, wbDaily, vc7);
     var monthly = buildMonthly(vcMonthlyData, dailyArray);
@@ -1250,10 +1227,11 @@ tz
     if (owData && owData.main && owData.main.humidity != null) humidity = owData.main.humidity;
     if (humidity == null) humidity = waCurr.humidity;
 
-    var uv = null;
-    if (dailyArray.length && dailyArray[0].uv != null) uv = dailyArray[0].uv;
-    if (uv == null && wbDaily && wbDaily.data && wbDaily.data[0]) uv = first(wbDaily.data[0].uv, wbDaily.data[0].max_uv);
-    if (uv == null) uv = waCurr.uv;
+    var uv = first(
+      waCurr.uv,
+      wbDaily && wbDaily.data && wbDaily.data[0] ? first(wbDaily.data[0].uv, wbDaily.data[0].max_uv) : null,
+      dailyArray.length ? dailyArray[0].uv : null
+    );
 
     var realFeel = first(
       omCurrentData && omCurrentData.current ? omCurrentData.current.apparent_temperature : null,
@@ -1262,22 +1240,15 @@ tz
       owData && owData.main ? owData.main.feels_like : null
     );
 
-    var lightningBoost = getLightningBoost(wbCurrent);
     var stormProbability = computeStormProbability(
       first(omStorm.precipitation_probability, rainChance),
       first(mbCurrent.cloudCover, tmCurrent.cloudCover),
-      omStorm.cape,
-      lightningBoost
-    );
-
-    var weatherCode = first(
-      owData && owData.weather && owData.weather[0] ? owmCodeToWMO(owData.weather[0].id) : null,
-      waCodeToWMO(waCurr.condition ? waCurr.condition.code : 1000)
+      omStorm.cape
     );
 
     var conditionText = getWeatherText(weatherCode, first(waCurr.is_day, 1));
 
-      var skyMetrics = {
+    var skyMetrics = {
       realfeel_shade: realFeel != null ? roundVal(realFeel - 3) : null,
       cloud_cover: roundVal(first(mbCurrent.cloudCover, tmCurrent.cloudCover)),
       cloud_base: checkwxCeilingFeet != null ? roundVal(checkwxCeilingFeet / 3280.84) : null,
