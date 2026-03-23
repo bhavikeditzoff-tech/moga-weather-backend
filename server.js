@@ -9,7 +9,7 @@ app.use(cors());
 const WEATHERAPI_KEY = process.env.WEATHERAPI_KEY;
 const TOMORROW_KEY = process.env.TOMORROW_API_KEY;
 const WEATHERBIT_KEY = process.env.WEATHERBIT_API_KEY;
-const VISUALCROSSING_KEY = process.env.VISUAL_CROSSING_API_KEY;
+const VISUAL_CROSSING_KEY = process.env.VISUAL_CROSSING_API_KEY;
 const PIRATE_KEY = process.env.PIRATE_WEATHER_KEY;
 const OPENWEATHER_KEY = process.env.OPENWEATHER_KEY;
 const ACCUWEATHER_KEY = process.env.ACCUWEATHER_API_KEY;
@@ -23,10 +23,6 @@ var accuForecastCache = {};
 var GENERAL_CACHE_MS = 30 * 60 * 1000;
 var ACCU_LOCATION_CACHE_MS = 7 * 24 * 60 * 60 * 1000;
 var ACCU_FORECAST_CACHE_MS = 6 * 60 * 60 * 1000;
-
-function makeCK(lat, lon) {
-  return (Math.round(lat * 10) / 10) + "," + (Math.round(lon * 10) / 10);
-}
 
 function getCached(store, key, maxAge) {
   var entry = store[key];
@@ -49,6 +45,18 @@ function setCached(store, key, data) {
   store[key] = { data: data, time: Date.now() };
 }
 
+function makeCK(lat, lon) {
+  return (Math.round(lat * 10) / 10) + "," + (Math.round(lon * 10) / 10);
+}
+
+function getC(key) {
+  return getCached(generalCache, key, GENERAL_CACHE_MS);
+}
+
+function putC(key, data) {
+  setCached(generalCache, key, data);
+}
+
 /* ───── HELPERS ───── */
 
 function first() {
@@ -57,13 +65,6 @@ function first() {
     if (v !== undefined && v !== null && v !== "" && !Number.isNaN(v)) return v;
   }
   return null;
-}
-function getC(key) {
-  return getCached(generalCache, key, GENERAL_CACHE_MS);
-}
-
-function putC(key, data) {
-  return setCached(generalCache, key, data);
 }
 
 function sf(url, label) {
@@ -123,10 +124,6 @@ function epochToLocalISO(epochSec, tz) {
   }
 }
 
-function getLocalDateFromEpoch(epochSec, tz) {
-  return epochToLocalISO(epochSec, tz).substring(0, 10);
-}
-
 function getLocalHour(epochSec, tz) {
   try {
     var d = new Date(epochSec * 1000);
@@ -142,7 +139,7 @@ function getLocalHour(epochSec, tz) {
   return new Date(epochSec * 1000).getUTCHours();
 }
 
-/* ───── CODE CONVERTERS ───── */
+/* ───── CONVERTERS ───── */
 
 function waCodeToWMO(c) {
   var m = {
@@ -290,16 +287,70 @@ async function resolveIp() {
   return PRESETS.moga;
 }
 
-/* ───── ACCUWEATHER ───── */
+/* ───── FETCHERS ───── */
 
-async function getAccuLocationKey(loc) {
+async function fetchWeatherApi(loc) {
+  return await sf(
+    "https://api.weatherapi.com/v1/forecast.json?key=" + WEATHERAPI_KEY +
+      "&q=" + loc.lat + "," + loc.lon +
+      "&days=3&aqi=yes&alerts=no",
+    "WeatherAPI"
+  );
+}
+
+async function fetchTomorrowCurrent(loc) {
+  if (!TOMORROW_KEY) return null;
+  return await sf(
+    "https://api.tomorrow.io/v4/timelines?location=" + loc.lat + "," + loc.lon +
+      "&fields=temperature,temperatureApparent" +
+      "&timesteps=current&units=metric&apikey=" + TOMORROW_KEY,
+    "Tomorrow-Current"
+  );
+}
+
+async function fetchWeatherbitCurrent(loc) {
+  if (!WEATHERBIT_KEY) return null;
+  return await sf(
+    "https://api.weatherbit.io/v2.0/current?lat=" + loc.lat + "&lon=" + loc.lon + "&key=" + WEATHERBIT_KEY,
+    "Weatherbit-Current"
+  );
+}
+
+async function fetchWeatherbitDaily(loc) {
+  if (!WEATHERBIT_KEY) return null;
+  return await sf(
+    "https://api.weatherbit.io/v2.0/forecast/daily?lat=" + loc.lat + "&lon=" + loc.lon + "&days=10&key=" + WEATHERBIT_KEY,
+    "Weatherbit-Daily"
+  );
+}
+
+async function fetchPirate(loc) {
+  if (!PIRATE_KEY) return null;
+  return await sf(
+    "https://api.pirateweather.net/forecast/" + PIRATE_KEY + "/" + loc.lat + "," + loc.lon +
+      "?units=si&exclude=minutely,alerts",
+    "Pirate"
+  );
+}
+
+async function fetchOpenWeather(loc) {
+  if (!OPENWEATHER_KEY) return null;
+  return await sf(
+    "https://api.openweathermap.org/data/2.5/weather?lat=" + loc.lat + "&lon=" + loc.lon +
+      "&appid=" + OPENWEATHER_KEY + "&units=metric",
+    "OpenWeather"
+  );
+}
+
+async function fetchAccuLocationKey(loc) {
   if (!ACCUWEATHER_KEY) return null;
 
   var key = makeCK(loc.lat, loc.lon);
   var cached = getCached(accuLocationCache, key, ACCU_LOCATION_CACHE_MS);
   if (cached) return cached;
 
-  var url = "http://dataservice.accuweather.com/locations/v1/cities/geoposition/search?apikey=" +
+  var url =
+    "http://dataservice.accuweather.com/locations/v1/cities/geoposition/search?apikey=" +
     ACCUWEATHER_KEY + "&q=" + loc.lat + "%2C" + loc.lon;
 
   var data = await sf(url, "AccuWeather-Location");
@@ -311,24 +362,64 @@ async function getAccuLocationKey(loc) {
 }
 
 async function fetchAccuForecast(loc) {
+  if (!ACCUWEATHER_KEY) return null;
+
   var key = makeCK(loc.lat, loc.lon);
   var cached = getCached(accuForecastCache, key, ACCU_FORECAST_CACHE_MS);
   if (cached) {
-    console.log("AccuWeather forecast cache hit for", key);
+    console.log("AccuWeather forecast cache hit:", key);
     return cached;
   }
 
-  var locationKey = await getAccuLocationKey(loc);
+  var locationKey = await fetchAccuLocationKey(loc);
   if (!locationKey) return null;
 
-  var url = "http://dataservice.accuweather.com/forecasts/v1/daily/10day/" +
-    locationKey + "?apikey=" + ACCUWEATHER_KEY + "&metric=true&details=true";
+  var url =
+    "http://dataservice.accuweather.com/forecasts/v1/daily/10day/" +
+    locationKey +
+    "?apikey=" + ACCUWEATHER_KEY +
+    "&metric=true&details=true";
 
   var data = await sf(url, "AccuWeather-10Day");
   if (data && data.DailyForecasts) {
     setCached(accuForecastCache, key, data);
   }
   return data;
+}
+
+async function fetchVisualCrossingMonthly(loc) {
+  if (!VISUAL_CROSSING_KEY) return null;
+
+  var now = new Date();
+  var y = now.getFullYear();
+  var m = String(now.getMonth() + 1).padStart(2, "0");
+  var monthStart = y + "-" + m + "-01";
+  var monthEndDate = new Date(y, now.getMonth() + 1, 0);
+  var monthEnd = monthEndDate.toISOString().split("T")[0];
+
+  return await sf(
+    "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/" +
+      loc.lat + "," + loc.lon + "/" + monthStart + "/" + monthEnd +
+      "?key=" + VISUAL_CROSSING_KEY + "&unitGroup=metric&include=days",
+    "VisualCrossing-Monthly"
+  );
+}
+
+/* ───── PARSE TOMORROW CURRENT ───── */
+
+function parseTomorrowCurrent(tmData) {
+  var temp = null;
+  var feels = null;
+
+  if (tmData && tmData.data && tmData.data.timelines && tmData.data.timelines.length) {
+    var intervals = tmData.data.timelines[0].intervals || [];
+    if (intervals.length && intervals[0].values) {
+      temp = intervals[0].values.temperature;
+      feels = intervals[0].values.temperatureApparent;
+    }
+  }
+
+  return { temp: temp, feelsLike: feels };
 }
 
 /* ───── HOURLY ───── */
@@ -494,6 +585,16 @@ function buildDaily(accuData) {
     var d = list[i];
     var dateStr = d.Date ? new Date(d.Date).toISOString().split("T")[0] : null;
 
+    var uvVal = null;
+    if (d.AirAndPollen && d.AirAndPollen.length) {
+      for (var p = 0; p < d.AirAndPollen.length; p++) {
+        if (d.AirAndPollen[p].Name === "UVIndex") {
+          uvVal = d.AirAndPollen[p].Value;
+          break;
+        }
+      }
+    }
+
     out.push({
       date: dateStr,
       weather_code: accuPhraseToWMO(
@@ -506,9 +607,7 @@ function buildDaily(accuData) {
       precip_chance: d.Day && d.Day.PrecipitationProbability != null ? d.Day.PrecipitationProbability : null,
       sunrise: d.Sun && d.Sun.Rise ? new Date(d.Sun.Rise).toISOString().substring(0, 19) : null,
       sunset: d.Sun && d.Sun.Set ? new Date(d.Sun.Set).toISOString().substring(0, 19) : null,
-      uv: d.AirAndPollen && d.AirAndPollen.length ? first(
-        (d.AirAndPollen.find(function (x) { return x.Name === "UVIndex"; }) || {}).Value
-      ) : null
+      uv: uvVal
     });
   }
 
@@ -608,7 +707,7 @@ app.get("/api/weather", async function (req, res) {
     var results = await Promise.all([
       fetchWeatherApi(loc),
       fetchTomorrowCurrent(loc),
-      fetchWeatherbitHourly(loc),
+      fetchWeatherbitCurrent(loc),
       fetchWeatherbitDaily(loc),
       fetchPirate(loc),
       fetchOpenWeather(loc),
@@ -618,7 +717,7 @@ app.get("/api/weather", async function (req, res) {
 
     var waData = results[0];
     var tmCurrentData = results[1];
-    var wbHourly = results[2];
+    var wbCurrent = results[2];
     var wbDaily = results[3];
     var prData = results[4];
     var owData = results[5];
@@ -628,7 +727,7 @@ app.get("/api/weather", async function (req, res) {
     console.log(
       "API Status — WA:", !!waData,
       "TM:", !!tmCurrentData,
-      "WBH:", !!wbHourly,
+      "WBC:", !!wbCurrent,
       "WBD:", !!wbDaily,
       "PR:", !!prData,
       "OW:", !!owData,
@@ -646,13 +745,13 @@ app.get("/api/weather", async function (req, res) {
     var tmCurrent = parseTomorrowCurrent(tmCurrentData);
 
     // Hourly
-    var hourly = buildHourlyFromPirateAndWB(wbHourly, prData, tz);
+    var hourly = buildHourlyFromPirateAndWB(wbCurrent, prData, tz);
 
-    // Current temp (Tomorrow primary, then current hourly, then others)
+    // Current temp
     var currentTemp = first(
       tmCurrent.temp,
       hourly.temperature_2m && hourly.temperature_2m.length ? hourly.temperature_2m[0] : null,
-      wbHourly && wbHourly.data && wbHourly.data[0] ? first(wbHourly.data[0].temp, wbHourly.data[0].app_temp) : null,
+      wbCurrent && wbCurrent.data && wbCurrent.data[0] ? first(wbCurrent.data[0].temp, wbCurrent.data[0].app_temp) : null,
       owData && owData.main ? owData.main.temp : null,
       waCurr.temp_c
     );
@@ -667,7 +766,7 @@ app.get("/api/weather", async function (req, res) {
     // Daily 10 days from AccuWeather
     var dailyArray = buildDaily(accuData);
 
-    // Monthly = VC history + same 10-day forecast
+    // Monthly = VC history + same 10-day future
     var monthly = buildMonthly(vcMonthlyData, dailyArray);
 
     // AQ
@@ -734,9 +833,9 @@ app.get("/api/weather", async function (req, res) {
         condition_text: waCurr.condition ? waCurr.condition.text : null,
         is_day: first(waCurr.is_day, 1),
         feelslike_c: first(
+          waCurr.feelslike_c,
           tmCurrent.feelsLike,
-          owData && owData.main ? owData.main.feels_like : null,
-          waCurr.feelslike_c
+          owData && owData.main ? owData.main.feels_like : null
         ),
         humidity: humidity,
         wind_kph: first(waCurr.wind_kph),
