@@ -6,6 +6,7 @@ const app = express();
 app.use(cors());
 
 const WEATHERAPI_KEY = process.env.WEATHERAPI_KEY;
+const TOMORROW_KEY = process.env.TOMORROW_API_KEY;
 const WEATHERBIT_KEY = process.env.WEATHERBIT_API_KEY;
 const VISUALCROSSING_KEY = process.env.VISUAL_CROSSING_API_KEY;
 const PIRATE_KEY = process.env.PIRATE_WEATHER_KEY;
@@ -121,7 +122,21 @@ function getLocalHour(epochSec, tz) {
 /* ───── CODE CONVERTERS ───── */
 
 function waCodeToWMO(c) {
-  var m = { 1000: 0, 1003: 2, 1006: 3, 1009: 3, 1030: 45, 1063: 61, 1066: 71, 1069: 66, 1072: 56, 1087: 95, 1114: 73, 1117: 75, 1135: 45, 1147: 48, 1150: 51, 1153: 51, 1168: 56, 1171: 57, 1180: 61, 1183: 61, 1186: 63, 1189: 63, 1192: 65, 1195: 65, 1198: 66, 1201: 67, 1204: 66, 1207: 67, 1210: 71, 1213: 71, 1216: 73, 1219: 73, 1222: 75, 1225: 75, 1237: 77, 1240: 80, 1243: 81, 1246: 82, 1249: 85, 1252: 86, 1255: 85, 1258: 86, 1261: 77, 1264: 77, 1273: 95, 1276: 95, 1279: 95, 1282: 96 };
+  var m = {
+    1000: 0, 1003: 2, 1006: 3, 1009: 3, 1030: 45,
+    1063: 61, 1066: 71, 1069: 66, 1072: 56, 1087: 95,
+    1114: 73, 1117: 75, 1135: 45, 1147: 48,
+    1150: 51, 1153: 51, 1168: 56, 1171: 57,
+    1180: 61, 1183: 61, 1186: 63, 1189: 63,
+    1192: 65, 1195: 65, 1198: 66, 1201: 67,
+    1204: 66, 1207: 67,
+    1210: 71, 1213: 71, 1216: 73, 1219: 73,
+    1222: 75, 1225: 75, 1237: 77,
+    1240: 80, 1243: 81, 1246: 82,
+    1249: 85, 1252: 86, 1255: 85, 1258: 86,
+    1261: 77, 1264: 77,
+    1273: 95, 1276: 95, 1279: 95, 1282: 96
+  };
   return m[c] !== undefined ? m[c] : 0;
 }
 
@@ -169,6 +184,22 @@ function vcToWMO(icon) {
   return 2;
 }
 
+/* ───── AQI HELPER ───── */
+
+function buildAQ(waData, wbDaily) {
+  var values = [];
+  if (waData && waData.current && waData.current.air_quality) {
+    var pm = waData.current.air_quality.pm2_5;
+    if (pm != null && !isNaN(pm)) values.push(pm);
+  }
+  if (wbDaily && wbDaily.data && wbDaily.data[0]) {
+    var aqi = wbDaily.data[0].aqi;
+    if (aqi != null && !isNaN(aqi)) values.push(aqi * 0.3);
+  }
+  if (!values.length) return null;
+  return Math.round((values.reduce(function (a, b) { return a + b; }, 0) / values.length) * 10) / 10;
+}
+
 /* ───── LOCATION ───── */
 
 var PRESETS = {
@@ -176,13 +207,23 @@ var PRESETS = {
 };
 
 async function resolveLoc(q) {
-  var city = (q.city || "").trim(), ckey = city.toLowerCase();
+  var city = (q.city || "").trim();
+  var ckey = city.toLowerCase();
   var lat = q.lat != null ? Number(q.lat) : null;
   var lon = q.lon != null ? Number(q.lon) : null;
 
   if (lat != null && lon != null && !isNaN(lat) && !isNaN(lon)) {
     var r = await sf("https://api.weatherapi.com/v1/search.json?key=" + WEATHERAPI_KEY + "&q=" + lat + "," + lon, "RevGeo");
-    if (r && r.length) return { key: "coords", name: r[0].name || "", region: r[0].region || "", country: r[0].country || "", lat: lat, lon: lon };
+    if (r && r.length) {
+      return {
+        key: "coords",
+        name: r[0].name || "",
+        region: r[0].region || "",
+        country: r[0].country || "",
+        lat: lat,
+        lon: lon
+      };
+    }
     return { key: "coords", name: "", region: "", country: "", lat: lat, lon: lon };
   }
 
@@ -190,52 +231,95 @@ async function resolveLoc(q) {
 
   if (city) {
     var wa = await sf("https://api.weatherapi.com/v1/search.json?key=" + WEATHERAPI_KEY + "&q=" + encodeURIComponent(city), "WA-Geo");
-    if (wa && wa.length) return { key: ckey, name: wa[0].name || city, region: wa[0].region || "", country: wa[0].country || "", lat: wa[0].lat, lon: wa[0].lon };
+    if (wa && wa.length) {
+      return {
+        key: ckey,
+        name: wa[0].name || city,
+        region: wa[0].region || "",
+        country: wa[0].country || "",
+        lat: wa[0].lat,
+        lon: wa[0].lon
+      };
+    }
   }
 
   return PRESETS.moga;
 }
 
 async function resolveIp() {
-  var g = await sf("https://ipapi.co/json/", "IPAPI");
-  if (!g || !g.latitude) return PRESETS.moga;
-  return { key: "ip", name: g.city || "Unknown", region: g.region || "", country: g.country_name || "", lat: Number(g.latitude), lon: Number(g.longitude) };
+  return PRESETS.moga;
 }
 
 /* ───── FETCHERS ───── */
 
 async function fetchWeatherApi(loc) {
-  return await sf("https://api.weatherapi.com/v1/forecast.json?key=" + WEATHERAPI_KEY + "&q=" + loc.lat + "," + loc.lon + "&days=3&aqi=yes&alerts=no", "WeatherAPI");
+  return await sf(
+    "https://api.weatherapi.com/v1/forecast.json?key=" + WEATHERAPI_KEY +
+    "&q=" + loc.lat + "," + loc.lon +
+    "&days=3&aqi=yes&alerts=no",
+    "WeatherAPI"
+  );
+}
+
+async function fetchTomorrowCurrent(loc) {
+  if (!TOMORROW_KEY) return null;
+  return await sf(
+    "https://api.tomorrow.io/v4/timelines?location=" + loc.lat + "," + loc.lon +
+    "&fields=temperature,temperatureApparent" +
+    "&timesteps=current&units=metric&apikey=" + TOMORROW_KEY,
+    "Tomorrow-Current"
+  );
 }
 
 async function fetchWeatherbitHourly(loc) {
   if (!WEATHERBIT_KEY) return null;
-  return await sf("https://api.weatherbit.io/v2.0/forecast/hourly?lat=" + loc.lat + "&lon=" + loc.lon + "&hours=12&key=" + WEATHERBIT_KEY, "Weatherbit-Hourly");
+  return await sf(
+    "https://api.weatherbit.io/v2.0/current?lat=" + loc.lat + "&lon=" + loc.lon + "&key=" + WEATHERBIT_KEY,
+    "Weatherbit-Current"
+  );
 }
 
 async function fetchWeatherbitDaily(loc) {
   if (!WEATHERBIT_KEY) return null;
-  return await sf("https://api.weatherbit.io/v2.0/forecast/daily?lat=" + loc.lat + "&lon=" + loc.lon + "&days=9&key=" + WEATHERBIT_KEY, "Weatherbit-Daily");
+  return await sf(
+    "https://api.weatherbit.io/v2.0/forecast/daily?lat=" + loc.lat + "&lon=" + loc.lon + "&days=9&key=" + WEATHERBIT_KEY,
+    "Weatherbit-Daily"
+  );
 }
 
 async function fetchPirate(loc) {
   if (!PIRATE_KEY) return null;
-  return await sf("https://api.pirateweather.net/forecast/" + PIRATE_KEY + "/" + loc.lat + "," + loc.lon + "?units=si&exclude=minutely,alerts", "Pirate");
+  return await sf(
+    "https://api.pirateweather.net/forecast/" + PIRATE_KEY + "/" + loc.lat + "," + loc.lon +
+    "?units=si&exclude=minutely,alerts",
+    "Pirate"
+  );
 }
 
 async function fetchOpenWeather(loc) {
   if (!OPENWEATHER_KEY) return null;
-  return await sf("https://api.openweathermap.org/data/2.5/weather?lat=" + loc.lat + "&lon=" + loc.lon + "&appid=" + OPENWEATHER_KEY + "&units=metric", "OpenWeather");
+  return await sf(
+    "https://api.openweathermap.org/data/2.5/weather?lat=" + loc.lat + "&lon=" + loc.lon +
+    "&appid=" + OPENWEATHER_KEY + "&units=metric",
+    "OpenWeather"
+  );
 }
 
 async function fetchOpenMeteo(loc) {
-  return await sf("https://api.open-meteo.com/v1/forecast?latitude=" + loc.lat + "&longitude=" + loc.lon + "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset,uv_index_max&timezone=auto&forecast_days=9", "OpenMeteo");
+  return await sf(
+    "https://api.open-meteo.com/v1/forecast?latitude=" + loc.lat +
+    "&longitude=" + loc.lon +
+    "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset,uv_index_max" +
+    "&timezone=auto&forecast_days=9",
+    "OpenMeteo"
+  );
 }
 
 async function fetchVisualCrossingMonthly(loc) {
   if (!VISUALCROSSING_KEY) return null;
   var now = new Date();
-  var y = now.getFullYear(), m = String(now.getMonth() + 1).padStart(2, "0");
+  var y = now.getFullYear();
+  var m = String(now.getMonth() + 1).padStart(2, "0");
   var monthStart = y + "-" + m + "-01";
   var monthEndDate = new Date(y, now.getMonth() + 1, 0);
   var monthEnd = monthEndDate.toISOString().split("T")[0];
@@ -248,77 +332,81 @@ async function fetchVisualCrossingMonthly(loc) {
   );
 }
 
-/* ───── HOURLY ───── */
+/* ───── PARSE TOMORROW CURRENT ───── */
 
-function buildHourlyFromWeatherbit(wbHourly) {
-  var time = [], temp = [], code = [], isDay = [];
-  if (!wbHourly || !wbHourly.data) return { time: time, temperature_2m: temp, weather_code: code, is_day: isDay };
+function parseTomorrowCurrent(tmData) {
+  var temp = null;
+  var feels = null;
 
-  var nowEpoch = Math.floor(Date.now() / 1000);
-  var count = 0;
-
-  for (var i = 0; i < wbHourly.data.length && count < 8; i++) {
-    var h = wbHourly.data[i];
-    var ts = h.timestamp_local || h.datetime;
-    if (!ts) continue;
-    if (h.ts != null && h.ts < nowEpoch - 3600) continue;
-
-    var localTime = String(ts).replace(" ", "T");
-    time.push(localTime);
-    temp.push(first(h.temp, h.app_temp));
-    code.push(wbCodeToWMO(h.weather ? h.weather.code : 800));
-    var hourNum = parseInt(localTime.substring(11, 13));
-    isDay.push((hourNum >= 6 && hourNum < 18) ? 1 : 0);
-    count++;
+  if (tmData && tmData.data && tmData.data.timelines && tmData.data.timelines.length) {
+    var intervals = tmData.data.timelines[0].intervals || [];
+    if (intervals.length && intervals[0].values) {
+      temp = intervals[0].values.temperature;
+      feels = intervals[0].values.temperatureApparent;
+    }
   }
 
-  return { time: time, temperature_2m: temp, weather_code: code, is_day: isDay };
+  return { temp: temp, feelsLike: feels };
 }
 
-function extendHourlyWithPirate(hourly, prData, tz) {
-  if (!prData || !prData.hourly || !prData.hourly.data) return hourly;
+/* ───── HOURLY ───── */
 
-  var existingKeys = {};
-  for (var i = 0; i < hourly.time.length; i++) {
-    existingKeys[hourly.time[i].substring(0, 13)] = true;
-  }
-
-  var ph = prData.hourly.data;
+function buildHourlyFromPirateAndWB(wbCurrent, prData, tz) {
+  var time = [], temp = [], code = [], isDay = [];
   var nowEpoch = Math.floor(Date.now() / 1000);
 
-  for (var j = 0; j < ph.length && hourly.time.length < 24; j++) {
-    var pEpoch = ph[j].time || 0;
-    if (pEpoch < nowEpoch - 3600) continue;
+  // First hourly slot from Weatherbit current
+  if (wbCurrent && wbCurrent.data && wbCurrent.data.length) {
+    var c = wbCurrent.data[0];
+    var currentLocal = epochToLocalISO(nowEpoch, tz);
+    time.push(currentLocal);
+    temp.push(first(c.temp, c.app_temp));
+    code.push(wbCodeToWMO(c.weather ? c.weather.code : 800));
+    var currentHour = parseInt(currentLocal.substring(11, 13));
+    isDay.push((currentHour >= 6 && currentHour < 18) ? 1 : 0);
+  }
 
-    var localStr = epochToLocalISO(pEpoch, tz);
-    var hourKey = localStr.substring(0, 13);
-    if (existingKeys[hourKey]) continue;
+  if (prData && prData.hourly && prData.hourly.data) {
+    var existingKeys = {};
+    for (var i = 0; i < time.length; i++) {
+      existingKeys[time[i].substring(0, 13)] = true;
+    }
 
-    var localHour = parseInt(localStr.substring(11, 13));
-    hourly.time.push(localStr);
-    hourly.temperature_2m.push(ph[j].temperature);
-    hourly.weather_code.push(pirateToWMO(ph[j].icon));
-    hourly.is_day.push((localHour >= 6 && localHour < 18) ? 1 : 0);
-    existingKeys[hourKey] = true;
+    var ph = prData.hourly.data;
+    for (var j = 0; j < ph.length && time.length < 24; j++) {
+      var pEpoch = ph[j].time || 0;
+      if (pEpoch < nowEpoch) continue;
+
+      var localStr = epochToLocalISO(pEpoch, tz);
+      var hourKey = localStr.substring(0, 13);
+      if (existingKeys[hourKey]) continue;
+
+      var localHour = parseInt(localStr.substring(11, 13));
+      time.push(localStr);
+      temp.push(ph[j].temperature);
+      code.push(pirateToWMO(ph[j].icon));
+      isDay.push((localHour >= 6 && localHour < 18) ? 1 : 0);
+      existingKeys[hourKey] = true;
+    }
   }
 
   var combined = [];
-  for (var k = 0; k < hourly.time.length; k++) {
+  for (var k = 0; k < time.length; k++) {
     combined.push({
-      time: hourly.time[k],
-      temp: hourly.temperature_2m[k],
-      code: hourly.weather_code[k],
-      isDay: hourly.is_day[k]
+      time: time[k],
+      temp: temp[k],
+      code: code[k],
+      isDay: isDay[k]
     });
   }
   combined.sort(function (a, b) { return a.time.localeCompare(b.time); });
 
-  hourly.time = combined.map(function (c) { return c.time; });
-  hourly.temperature_2m = combined.map(function (c) { return c.temp; });
-  hourly.weather_code = combined.map(function (c) { return c.code; });
-  hourly.is_day = combined.map(function (c) { return c.isDay; });
-
-  return hourly;
+  return {
+    time: combined.map(function (c) { return c.time; }),
+    temperature_2m: combined.map(function (c) { return c.temp; }),
+    weather_code: combined.map(function (c) { return c.code; }),
+    is_day: combined.map(function (c) { return c.isDay; })
+  };
 }
 
 /* ───── TIME PERIODS ───── */
@@ -455,7 +543,6 @@ function buildMonthly(vcMonthlyData, dailyArray) {
     }
   }
 
-  // Overlay 9-day forecast so monthly future matches home page exactly
   for (var j = 0; j < dailyArray.length; j++) {
     var dy = dailyArray[j];
     map[dy.date] = {
@@ -469,22 +556,6 @@ function buildMonthly(vcMonthlyData, dailyArray) {
   return Object.values(map).sort(function (a, b) {
     return new Date(a.date) - new Date(b.date);
   });
-}
-
-/* ───── AIR QUALITY ───── */
-
-function buildAQ(waData, wbDaily) {
-  var values = [];
-  if (waData && waData.current && waData.current.air_quality) {
-    var pm = waData.current.air_quality.pm2_5;
-    if (pm != null && !isNaN(pm)) values.push(pm);
-  }
-  if (wbDaily && wbDaily.data && wbDaily.data[0]) {
-    var aqi = wbDaily.data[0].aqi;
-    if (aqi != null && !isNaN(aqi)) values.push(aqi * 0.3);
-  }
-  if (!values.length) return null;
-  return Math.round((values.reduce(function (a, b) { return a + b; }, 0) / values.length) * 10) / 10;
 }
 
 /* ───── ROUTES ───── */
@@ -502,7 +573,13 @@ app.get("/api/search", async function (req, res) {
     if (wa && wa.length) {
       return res.json({
         results: wa.map(function (i) {
-          return { name: i.name || "", region: i.region || "", country: i.country || "", latitude: i.lat, longitude: i.lon };
+          return {
+            name: i.name || "",
+            region: i.region || "",
+            country: i.country || "",
+            latitude: i.lat,
+            longitude: i.lon
+          };
         })
       });
     }
@@ -539,6 +616,7 @@ app.get("/api/weather", async function (req, res) {
 
     var results = await Promise.all([
       fetchWeatherApi(loc),
+      fetchTomorrowCurrent(loc),
       fetchWeatherbitHourly(loc),
       fetchWeatherbitDaily(loc),
       fetchPirate(loc),
@@ -548,14 +626,24 @@ app.get("/api/weather", async function (req, res) {
     ]);
 
     var waData = results[0];
-    var wbHourly = results[1];
-    var wbDaily = results[2];
-    var prData = results[3];
-    var owData = results[4];
-    var omData = results[5];
-    var vcMonthlyData = results[6];
+    var tmCurrentData = results[1];
+    var wbHourly = results[2];
+    var wbDaily = results[3];
+    var prData = results[4];
+    var owData = results[5];
+    var omData = results[6];
+    var vcMonthlyData = results[7];
 
-    console.log("API Status — WA:", !!waData, "WBH:", !!wbHourly, "WBD:", !!wbDaily, "PR:", !!prData, "OW:", !!owData, "OM:", !!omData, "VCM:", !!vcMonthlyData);
+    console.log(
+      "API Status — WA:", !!waData,
+      "TM:", !!tmCurrentData,
+      "WBH:", !!wbHourly,
+      "WBD:", !!wbDaily,
+      "PR:", !!prData,
+      "OW:", !!owData,
+      "OM:", !!omData,
+      "VCM:", !!vcMonthlyData
+    );
 
     if (!waData) {
       return res.status(503).json({ error: "Primary weather API unavailable" });
@@ -565,17 +653,23 @@ app.get("/api/weather", async function (req, res) {
     var waLoc = waData.location || {};
     var tz = waLoc.tz_id || (omData ? omData.timezone : null) || "UTC";
 
+    var tmCurrent = parseTomorrowCurrent(tmCurrentData);
+
     // Hourly
-    var hourly = buildHourlyFromWeatherbit(wbHourly);
-    hourly = extendHourlyWithPirate(hourly, prData, tz);
-    if (hourly.temperature_2m && hourly.temperature_2m.length && owData && owData.main && owData.main.temp != null) {
-      hourly.temperature_2m[0] = owData.main.temp;
-    }
-    // Current temp should match hourly NOW card exactly
-     var currentTemp = first(
+    var hourly = buildHourlyFromPirateAndWB(wbHourly, prData, tz);
+
+    // Current temp should match "Now" if possible
+    var currentTemp = first(
+      tmCurrent.temp,
+      hourly.temperature_2m && hourly.temperature_2m.length ? hourly.temperature_2m[0] : null,
+      wbHourly && wbHourly.data && wbHourly.data[0] ? first(wbHourly.data[0].temp, wbHourly.data[0].app_temp) : null,
       owData && owData.main ? owData.main.temp : null,
       waCurr.temp_c
     );
+
+    if (hourly.temperature_2m && hourly.temperature_2m.length && currentTemp != null) {
+      hourly.temperature_2m[0] = currentTemp;
+    }
 
     // Time periods
     var timePeriods = buildTimePeriodsFromHourly(hourly, prData, tz);
@@ -650,6 +744,7 @@ app.get("/api/weather", async function (req, res) {
         condition_text: waCurr.condition ? waCurr.condition.text : null,
         is_day: first(waCurr.is_day, 1),
         feelslike_c: first(
+          tmCurrent.feelsLike,
           owData && owData.main ? owData.main.feels_like : null,
           waCurr.feelslike_c
         ),
@@ -687,7 +782,15 @@ app.get("/api/weather", async function (req, res) {
 
     putC(cKey, result);
 
-    console.log("=== Done. Hourly:", hourly.time.length, "Daily:", dTime.length, "Monthly:", monthly.length, "CurrentTemp:", currentTemp, "===\n");
+    console.log(
+      "=== Done. Hourly:", hourly.time.length,
+      "Daily:", dTime.length,
+      "Monthly:", monthly.length,
+      "CurrentTemp:", currentTemp,
+      "RealFeel:", result.current.feelslike_c,
+      "===\n"
+    );
+
     res.json(result);
   } catch (e) {
     console.log("ERROR:", e);
