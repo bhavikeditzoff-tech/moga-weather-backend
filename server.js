@@ -58,6 +58,13 @@ function first() {
   }
   return null;
 }
+function getC(key) {
+  return getCached(generalCache, key, GENERAL_CACHE_MS);
+}
+
+function putC(key, data) {
+  return setCached(generalCache, key, data);
+}
 
 function sf(url, label) {
   return fetch(url)
