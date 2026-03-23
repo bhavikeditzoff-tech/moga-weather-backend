@@ -720,7 +720,7 @@ function computeStormProbability(precipProb, cloudCover, cape, lightningBoost) {
 }
 /* ───── HOURLY ───── */
 
-function buildHourlyFromOpenMeteo(omHourlyData, currentTemp, tz) {
+function buildHourlyFromOpenMeteo(omHourlyData, currentTemp, owCurrentCodeForNow) {
   var out = {
     time: [],
     temperature_2m: [],
@@ -786,7 +786,10 @@ function buildHourlyFromOpenMeteo(omHourlyData, currentTemp, tz) {
   if (out.temperature_2m.length && currentTemp != null) {
     out.temperature_2m[0] = roundVal(currentTemp);
   }
-
+  // Make "Now" condition match OpenWeather current condition
+  if (out.weather_code.length && owCurrentCodeForNow != null) {
+    out.weather_code[0] = owCurrentCodeForNow;
+  }
   console.log("Hourly currentHourKey:", currentHourKey, "startIdx:", startIdx, "firstHourly:", out.time[0]);
 
   return out;
@@ -1212,7 +1215,14 @@ console.log("CheckWX ceiling parsed:", checkwxCeilingFeet);
       waCurr.temp_c
     );
 
-    var hourly = buildHourlyFromOpenMeteo(omHourlyData, currentTemp, tz);
+   var hourly = buildHourlyFromOpenMeteo(
+  omHourlyData,
+  currentTemp,
+  first(
+    owData && owData.weather && owData.weather[0] ? owmCodeToWMO(owData.weather[0].id) : null,
+    null
+  )
+);
     var timePeriods = buildTimePeriodsFromHourly(hourly, prData, tz);
     var dailyArray = buildDaily(accuData, omDaily7, wbDaily, vc7);
     var monthly = buildMonthly(vcMonthlyData, dailyArray);
