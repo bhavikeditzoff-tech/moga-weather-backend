@@ -799,7 +799,7 @@ async function buildRecommendations(payload) {
       "- Sunset: " + (payload.sunsetText || "Unknown") + "\n";
 
     var response = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + GEMINI_KEY,
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=" + GEMINI_KEY,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -810,9 +810,11 @@ async function buildRecommendations(payload) {
       }
     );
 
-    if (!response.ok) {
-      throw new Error("Gemini HTTP " + response.status);
-    }
+   if (!response.ok) {
+  var errText = await response.text();
+  console.log("Gemini error body:", errText);
+  throw new Error("Gemini HTTP " + response.status);
+}
 
     var data = await response.json();
     var text = data.candidates &&
