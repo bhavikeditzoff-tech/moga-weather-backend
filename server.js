@@ -457,7 +457,8 @@ function computeStormProbability(precipProb, cloudCover, cape) {
   var capeVal = first(cape, 0);
   var capeFactor = getCapeFactor(capeVal);
 
-  if (p < 10 && capeVal < 500) {
+  // No storm possible if precip < 30% regardless of CAPE
+  if (p < 30) {
     return 0;
   }
 
@@ -1087,10 +1088,23 @@ function fetchMeteoblueCurrent(loc) {
 }
 
 function fetchCheckWX(loc) {
-  return sf(
+  return fetch(
     "https://api.checkwx.com/metar/lat/" + loc.lat + "/lon/" + loc.lon + "/decoded",
-    "CheckWX"
-  ).then(function (r) { return r; }).catch(function () { return null; });
+    { headers: { "X-API-Key": CHECKWX_API_KEY } }
+  )
+    .then(function (r) {
+      if (!r.ok) {
+        return r.text().then(function (t) {
+          console.log("CheckWX HTTP " + r.status + ": " + t.substring(0, 300));
+          return null;
+        });
+      }
+      return r.json();
+    })
+    .catch(function (e) {
+      console.log("CheckWX ERR:", e.message);
+      return null;
+    });
 }
 
 function buildAQ(waData, wbDaily) {
