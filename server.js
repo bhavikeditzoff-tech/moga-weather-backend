@@ -1059,7 +1059,25 @@ function buildRecommendations(payload) {
 
   return unique.slice(0, 8);
 }
+function buildAQ(waData, wbDaily) {
+  var values = [];
 
+  if (waData && waData.current && waData.current.air_quality) {
+    var pm = waData.current.air_quality.pm2_5;
+    if (pm != null && !isNaN(pm)) values.push(pm);
+  }
+
+  if (wbDaily && wbDaily.data && wbDaily.data[0]) {
+    var aqi = wbDaily.data[0].aqi;
+    if (aqi != null && !isNaN(aqi)) values.push(aqi * 0.3);
+  }
+
+  if (!values.length) return null;
+
+  return Math.round((values.reduce(function (a, b) {
+    return a + b;
+  }, 0) / values.length) * 10) / 10;
+}
 /* ───── MAIN WEATHER ROUTE ───── */
 
 app.get("/api/weather", async function (req, res) {
