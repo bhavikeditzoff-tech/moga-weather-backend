@@ -342,6 +342,15 @@ async function fetchOpenWeather(loc) {
   );
 }
 
+async function fetchOpenMeteoCurrent(loc) {
+  return await sf(
+    "https://api.open-meteo.com/v1/forecast?latitude=" + loc.lat +
+      "&longitude=" + loc.lon +
+      "&current=apparent_temperature&timezone=auto",
+    "OpenMeteo-Current"
+  );
+}
+
 async function fetchAccuLocationKey(loc) {
   if (!ACCUWEATHER_KEY) return null;
 
@@ -375,12 +384,12 @@ async function fetchAccuForecast(loc) {
   if (!locationKey) return null;
 
   var url =
-    "http://dataservice.accuweather.com/forecasts/v1/daily/10day/" +
+    "http://dataservice.accuweather.com/forecasts/v1/daily/5day/" +
     locationKey +
     "?apikey=" + ACCUWEATHER_KEY +
     "&metric=true&details=true";
 
-  var data = await sf(url, "AccuWeather-10Day");
+  var data = await sf(url, "AccuWeather-5Day");
   if (data && data.DailyForecasts) {
     setCached(accuForecastCache, key, data);
   }
@@ -572,14 +581,14 @@ function buildTimePeriodsFromHourly(hourly, prData, tz) {
   return result;
 }
 
-/* ───── DAILY 10 DAYS FROM ACCUWEATHER ───── */
+/* ───── DAILY 5 DAYS FROM ACCUWEATHER ───── */
 
 function buildDaily(accuData) {
   var out = [];
   if (!accuData || !accuData.DailyForecasts) return out;
 
   var list = accuData.DailyForecasts;
-  var count = Math.min(10, list.length);
+  var count = Math.min(5, list.length);
 
   for (var i = 0; i < count; i++) {
     var d = list[i];
@@ -614,7 +623,7 @@ function buildDaily(accuData) {
   return out;
 }
 
-/* ───── MONTHLY = VC HISTORY + 10-DAY FORECAST OVERLAY ───── */
+/* ───── MONTHLY = VC HISTORY + 5-DAY FORECAST OVERLAY ───── */
 
 function buildMonthly(vcMonthlyData, dailyArray) {
   var map = {};
@@ -711,6 +720,7 @@ app.get("/api/weather", async function (req, res) {
       fetchWeatherbitDaily(loc),
       fetchPirate(loc),
       fetchOpenWeather(loc),
+      fetchOpenMeteoCurrent(loc),
       fetchAccuForecast(loc),
       fetchVisualCrossingMonthly(loc)
     ]);
@@ -721,8 +731,9 @@ app.get("/api/weather", async function (req, res) {
     var wbDaily = results[3];
     var prData = results[4];
     var owData = results[5];
-    var accuData = results[6];
-    var vcMonthlyData = results[7];
+    var omCurrentData = results[6];
+    var accuData = results[7];
+    var vcMonthlyData = results[8];
 
     console.log(
       "API Status — WA:", !!waData,
@@ -731,6 +742,7 @@ app.get("/api/weather", async function (req, res) {
       "WBD:", !!wbDaily,
       "PR:", !!prData,
       "OW:", !!owData,
+      "OMC:", !!omCurrentData,
       "ACCU:", !!accuData,
       "VCM:", !!vcMonthlyData
     );
@@ -763,10 +775,10 @@ app.get("/api/weather", async function (req, res) {
     // Time periods
     var timePeriods = buildTimePeriodsFromHourly(hourly, prData, tz);
 
-    // Daily 10 days from AccuWeather
+    // Daily 5 days from AccuWeather
     var dailyArray = buildDaily(accuData);
 
-    // Monthly = VC history + same 10-day future
+    // Monthly = VC history + same 5-day future
     var monthly = buildMonthly(vcMonthlyData, dailyArray);
 
     // AQ
@@ -802,6 +814,14 @@ app.get("/api/weather", async function (req, res) {
     if (uv == null && wbDaily && wbDaily.data && wbDaily.data[0]) uv = first(wbDaily.data[0].uv, wbDaily.data[0].max_uv);
     if (uv == null) uv = waCurr.uv;
 
+    // RealFeel from Open-Meteo apparent temperature
+    var realFeel = first(
+      omCurrentData && omCurrentData.current ? omCurrentData.current.apparent_temperature : null,
+      waCurr.feelslike_c,
+      tmCurrent.feelsLike,
+      owData && owData.main ? owData.main.feels_like : null
+    );
+
     // Daily arrays
     var dTime = [], dCode = [], dMax = [], dMin = [], dPrecip = [], dSunrise = [], dSunset = [], dUv = [];
     for (var i = 0; i < dailyArray.length; i++) {
@@ -832,11 +852,7 @@ app.get("/api/weather", async function (req, res) {
         weather_code: waCodeToWMO(waCurr.condition ? waCurr.condition.code : 1000),
         condition_text: waCurr.condition ? waCurr.condition.text : null,
         is_day: first(waCurr.is_day, 1),
-        feelslike_c: first(
-          waCurr.feelslike_c,
-          tmCurrent.feelsLike,
-          owData && owData.main ? owData.main.feels_like : null
-        ),
+        feelslike_c: realFeel,
         humidity: humidity,
         wind_kph: first(waCurr.wind_kph),
         wind_degree: first(waCurr.wind_degree),
