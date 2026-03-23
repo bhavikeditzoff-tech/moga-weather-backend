@@ -720,7 +720,7 @@ function computeStormProbability(precipProb, cloudCover, cape, lightningBoost) {
 }
 /* ───── HOURLY ───── */
 
-function buildHourlyFromOpenMeteo(omHourlyData, currentTemp) {
+function buildHourlyFromOpenMeteo(omHourlyData, currentTemp, tz) {
   var out = {
     time: [],
     temperature_2m: [],
@@ -733,33 +733,61 @@ function buildHourlyFromOpenMeteo(omHourlyData, currentTemp) {
   }
 
   var h = omHourlyData.hourly;
-  var now = Date.now();
 
-  // Find nearest current hour instead of filtering by comparison only
-  var startIdx = 0;
-  var best = Infinity;
+  // Current local date/hour in target timezone
+  var now = new Date();
+  var parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(now);
 
+  var yy = "", mm = "", dd = "", hh = "";
+  for (var p = 0; p < parts.length; p++) {
+    if (parts[p].type === "year") yy = parts[p].value;
+    if (parts[p].type === "month") mm = parts[p].value;
+    if (parts[p].type === "day") dd = parts[p].value;
+    if (parts[p].type === "hour") hh = parts[p].value;
+  }
+
+  var currentHourKey = yy + "-" + mm + "-" + dd + "T" + hh;
+
+  // Find exact local-hour match first
+  var startIdx = -1;
   for (var i = 0; i < h.time.length; i++) {
-    var ts = new Date(h.time[i]).getTime();
-    var diff = Math.abs(ts - now);
-    if (!isNaN(ts) && diff < best) {
-      best = diff;
+    if (String(h.time[i]).substring(0, 13) === currentHourKey) {
       startIdx = i;
+      break;
     }
   }
 
-  for (var j = startIdx; j < h.time.length && out.time.length < 24; j++) {
-    out.time.push(h.time[j]);
-    out.temperature_2m.push(h.temperature_2m ? roundVal(h.temperature_2m[j]) : null);
-    out.weather_code.push(h.weather_code ? h.weather_code[j] : 0);
-    out.is_day.push(h.is_day ? h.is_day[j] : 1);
+  // If exact hour not found, fallback to nearest by string order
+  if (startIdx === -1) {
+    for (var j = 0; j < h.time.length; j++) {
+      if (String(h.time[j]).substring(0, 13) >= currentHourKey) {
+        startIdx = j;
+        break;
+      }
+    }
+  }
+
+  if (startIdx === -1) startIdx = 0;
+
+  for (var k = startIdx; k < h.time.length && out.time.length < 24; k++) {
+    out.time.push(h.time[k]);
+    out.temperature_2m.push(h.temperature_2m ? roundVal(h.temperature_2m[k]) : null);
+    out.weather_code.push(h.weather_code ? h.weather_code[k] : 0);
+    out.is_day.push(h.is_day ? h.is_day[k] : 1);
   }
 
   if (out.temperature_2m.length && currentTemp != null) {
     out.temperature_2m[0] = roundVal(currentTemp);
   }
 
-  console.log("OpenMeteo hourly startIdx:", startIdx, "first time:", out.time[0], "first temp:", out.temperature_2m[0]);
+  console.log("Hourly currentHourKey:", currentHourKey, "startIdx:", startIdx, "firstHourly:", out.time[0]);
 
   return out;
 }
@@ -1184,7 +1212,7 @@ console.log("CheckWX ceiling parsed:", checkwxCeilingFeet);
       waCurr.temp_c
     );
 
-    var hourly = buildHourlyFromOpenMeteo(omHourlyData, currentTemp);
+    var hourly = buildHourlyFromOpenMeteo(omHourlyData, currentTemp, tz);
     var timePeriods = buildTimePeriodsFromHourly(hourly, prData, tz);
     var dailyArray = buildDaily(accuData, omDaily7, wbDaily, vc7);
     var monthly = buildMonthly(vcMonthlyData, dailyArray);
