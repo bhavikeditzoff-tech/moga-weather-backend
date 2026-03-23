@@ -74,20 +74,15 @@ function roundVal(v) {
 }
 
 function avg(nums) {
-  var clean = nums.filter(function (n) {
-    return n != null && !isNaN(n);
-  });
+  var clean = nums.filter(function (n) { return n != null && !isNaN(n); });
   if (!clean.length) return null;
-  return clean.reduce(function (a, b) {
-    return a + b;
-  }, 0) / clean.length;
+  return clean.reduce(function (a, b) { return a + b; }, 0) / clean.length;
 }
 
 function majority(values) {
   var counts = {};
   var best = null;
   var max = -1;
-
   for (var i = 0; i < values.length; i++) {
     var v = values[i];
     if (v == null) continue;
@@ -104,9 +99,7 @@ function sf(url, label) {
   return fetch(url)
     .then(function (r) {
       if (!r.ok) {
-        return r.text().catch(function () {
-          return "";
-        }).then(function (t) {
+        return r.text().catch(function () { return ""; }).then(function (t) {
           console.log(label + " HTTP " + r.status + ": " + t.substring(0, 500));
           return null;
         });
@@ -172,6 +165,27 @@ function getLocalHour(epochSec, tz) {
     }
   } catch (e) {}
   return new Date(epochSec * 1000).getUTCHours();
+}
+
+function getIsDayNow(tz) {
+  try {
+    var d = new Date();
+    var parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      hour: "numeric",
+      hourCycle: "h23"
+    }).formatToParts(d);
+    var hh = 12;
+    for (var i = 0; i < parts.length; i++) {
+      if (parts[i].type === "hour") {
+        hh = parseInt(parts[i].value);
+        break;
+      }
+    }
+    return (hh >= 6 && hh < 18) ? 1 : 0;
+  } catch (e) {
+    return 1;
+  }
 }
 
 /* ───── WEATHER CODE CONVERTERS ───── */
@@ -718,7 +732,7 @@ function computeStormProbability(precipProb, cloudCover, cape) {
 
 /* ───── HOURLY ───── */
 
-function buildHourlyFromOpenMeteo(omHourlyData, currentTemp, owCurrentCodeForNow, tz) {
+function buildHourlyFromOpenMeteo(omHourlyData, currentTemp, currentWeatherCode, tz) {
   var out = {
     time: [],
     temperature_2m: [],
@@ -781,8 +795,9 @@ function buildHourlyFromOpenMeteo(omHourlyData, currentTemp, owCurrentCodeForNow
   if (out.temperature_2m.length && currentTemp != null) {
     out.temperature_2m[0] = roundVal(currentTemp);
   }
-  if (out.weather_code.length && owCurrentCodeForNow != null) {
-    out.weather_code[0] = owCurrentCodeForNow;
+
+  if (out.weather_code.length && currentWeatherCode != null) {
+    out.weather_code[0] = currentWeatherCode;
   }
 
   return out;
@@ -1194,6 +1209,8 @@ app.get("/api/weather", async function (req, res) {
       waCodeToWMO(waCurr.condition ? waCurr.condition.code : 1000)
     );
 
+    var currentIsDay = first(waCurr.is_day, getIsDayNow(tz));
+
     var hourly = buildHourlyFromOpenMeteo(
       omHourlyData,
       currentTemp,
@@ -1246,7 +1263,7 @@ app.get("/api/weather", async function (req, res) {
       omStorm.cape
     );
 
-    var conditionText = getWeatherText(weatherCode, first(waCurr.is_day, 1));
+    var conditionText = getWeatherText(weatherCode, currentIsDay);
 
     var skyMetrics = {
       realfeel_shade: realFeel != null ? roundVal(realFeel - 3) : null,
@@ -1311,7 +1328,7 @@ app.get("/api/weather", async function (req, res) {
         temperature_c: roundVal(currentTemp),
         weather_code: weatherCode,
         condition_text: conditionText,
-        is_day: first(waCurr.is_day, 1),
+        is_day: currentIsDay,
         feelslike_c: roundVal(realFeel),
         humidity: humidity,
         wind_kph: first(waCurr.wind_kph),
