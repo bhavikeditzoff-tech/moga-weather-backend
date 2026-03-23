@@ -1148,6 +1148,8 @@ app.get("/api/weather", async function (req, res) {
     var tmCurrent = parseTomorrowCurrent(tmCurrentData);
     var mbCurrent = parseMeteoblueCurrent(meteoblueData);
     var checkwxCeilingFeet = parseCheckWXCeiling(checkwxData);
+console.log("CheckWX raw:", JSON.stringify(checkwxData).substring(0, 1500));
+console.log("CheckWX ceiling parsed:", checkwxCeilingFeet);
     var accuPollen = parseAccuPollen(accuData);
     var omStorm = parseOpenMeteoStorm(omStormData);
 
