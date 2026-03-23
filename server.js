@@ -388,6 +388,15 @@ async function fetchOpenMeteoCurrent(loc) {
   );
 }
 
+async function fetchOpenMeteoHourly(loc) {
+  return await sf(
+    "https://api.open-meteo.com/v1/forecast?latitude=" + loc.lat +
+      "&longitude=" + loc.lon +
+      "&hourly=temperature_2m,weather_code,is_day&timezone=auto&forecast_days=2",
+    "OpenMeteo-Hourly"
+  );
+}
+
 async function fetchOpenMeteoDaily7(loc) {
   return await sf(
     "https://api.open-meteo.com/v1/forecast?latitude=" + loc.lat +
@@ -607,65 +616,36 @@ function parseMeteoblueCurrent(mbData) {
 
 /* ───── HOURLY ───── */
 
-function buildHourlyFromTomorrowAndPirate(tmHourly, prData, tz, currentTemp) {
-  var time = [], temp = [], code = [], isDay = [];
-
-  if (tmHourly && tmHourly.time && tmHourly.time.length) {
-    for (var i = 0; i < tmHourly.time.length; i++) {
-      time.push(tmHourly.time[i]);
-      temp.push(tmHourly.temperature_2m[i]);
-      code.push(tmHourly.weather_code[i]);
-      isDay.push(tmHourly.is_day[i]);
-    }
-  }
-
-  if (prData && prData.hourly && prData.hourly.data) {
-    var existingKeys = {};
-    for (var e = 0; e < time.length; e++) {
-      existingKeys[time[e].substring(0, 13)] = true;
-    }
-
-    var ph = prData.hourly.data;
-    var nowEpoch = Math.floor(Date.now() / 1000);
-
-    for (var j = 0; j < ph.length && time.length < 24; j++) {
-      var pEpoch = ph[j].time || 0;
-      if (pEpoch < nowEpoch) continue;
-
-      var localStr = epochToLocalISO(pEpoch, tz);
-      var hourKey = localStr.substring(0, 13);
-      if (existingKeys[hourKey]) continue;
-
-      var localHour = parseInt(localStr.substring(11, 13));
-      time.push(localStr);
-      temp.push(roundVal(ph[j].temperature));
-      code.push(pirateToWMO(ph[j].icon));
-      isDay.push((localHour >= 6 && localHour < 18) ? 1 : 0);
-      existingKeys[hourKey] = true;
-    }
-  }
-
-  if (temp.length && currentTemp != null) {
-    temp[0] = roundVal(currentTemp);
-  }
-
-  var combined = [];
-  for (var k = 0; k < time.length; k++) {
-    combined.push({
-      time: time[k],
-      temp: temp[k],
-      code: code[k],
-      isDay: isDay[k]
-    });
-  }
-  combined.sort(function (a, b) { return a.time.localeCompare(b.time); });
-
-  return {
-    time: combined.map(function (c) { return c.time; }),
-    temperature_2m: combined.map(function (c) { return c.temp; }),
-    weather_code: combined.map(function (c) { return c.code; }),
-    is_day: combined.map(function (c) { return c.isDay; })
+function buildHourlyFromOpenMeteo(omHourlyData, currentTemp) {
+  var out = {
+    time: [],
+    temperature_2m: [],
+    weather_code: [],
+    is_day: []
   };
+
+  if (!omHourlyData || !omHourlyData.hourly || !omHourlyData.hourly.time) {
+    return out;
+  }
+
+  var h = omHourlyData.hourly;
+  var now = Date.now();
+
+  for (var i = 0; i < h.time.length && out.time.length < 24; i++) {
+    var ts = new Date(h.time[i]).getTime();
+    if (ts < now - 3600000) continue;
+
+    out.time.push(h.time[i]);
+    out.temperature_2m.push(h.temperature_2m ? roundVal(h.temperature_2m[i]) : null);
+    out.weather_code.push(h.weather_code ? h.weather_code[i] : 0);
+    out.is_day.push(h.is_day ? h.is_day[i] : 1);
+  }
+
+  if (out.temperature_2m.length && currentTemp != null) {
+    out.temperature_2m[0] = roundVal(currentTemp);
+  }
+
+  return out;
 }
 
 /* ───── TIME PERIODS ───── */
@@ -695,7 +675,7 @@ function buildTimePeriodsFromHourly(hourly, prData, tz) {
       allHours.push({
         localDate: epochToLocalISO(pe, tz).substring(0, 10),
         localHour: getLocalHour(pe, tz),
-        temp: prData.hourly.data[p].temperature,
+        temp: roundVal(prData.hourly.data[p].temperature),
         code: pirateToWMO(prData.hourly.data[p].icon),
         precip: prData.hourly.data[p].precipProbability != null ? Math.round(prData.hourly.data[p].precipProbability * 100) : null
       });
@@ -764,7 +744,6 @@ function buildTimePeriodsFromHourly(hourly, prData, tz) {
 function buildDaily(accuData, omDaily7, wbDaily, vc7) {
   var out = [];
 
-  // first 5 days from AccuWeather
   if (accuData && accuData.DailyForecasts) {
     var list = accuData.DailyForecasts;
     var count = Math.min(5, list.length);
@@ -799,7 +778,6 @@ function buildDaily(accuData, omDaily7, wbDaily, vc7) {
     }
   }
 
-  // days 6-7 blended
   for (var idx = 5; idx < 7; idx++) {
     var maxCandidates = [];
     var minCandidates = [];
@@ -965,6 +943,7 @@ app.get("/api/weather", async function (req, res) {
       fetchPirate(loc),
       fetchOpenWeather(loc),
       fetchOpenMeteoCurrent(loc),
+      fetchOpenMeteoHourly(loc),
       fetchOpenMeteoDaily7(loc),
       fetchAccuForecast(loc),
       fetchVisualCrossingMonthly(loc),
@@ -980,11 +959,12 @@ app.get("/api/weather", async function (req, res) {
     var prData = results[5];
     var owData = results[6];
     var omCurrentData = results[7];
-    var omDaily7 = results[8];
-    var accuData = results[9];
-    var vcMonthlyData = results[10];
-    var vc7 = results[11];
-    var meteoblueData = results[12];
+    var omHourlyData = results[8];
+    var omDaily7 = results[9];
+    var accuData = results[10];
+    var vcMonthlyData = results[11];
+    var vc7 = results[12];
+    var meteoblueData = results[13];
 
     console.log(
       "API Status — WA:", !!waData,
@@ -995,6 +975,7 @@ app.get("/api/weather", async function (req, res) {
       "PR:", !!prData,
       "OW:", !!owData,
       "OMC:", !!omCurrentData,
+      "OMH:", !!omHourlyData,
       "OMD7:", !!omDaily7,
       "ACCU:", !!accuData,
       "VCM:", !!vcMonthlyData,
@@ -1015,14 +996,14 @@ app.get("/api/weather", async function (req, res) {
     var mbCurrent = parseMeteoblueCurrent(meteoblueData);
 
     var currentTemp = first(
-      tmCurrent.temp,
       omCurrentData && omCurrentData.current ? omCurrentData.current.temperature_2m : null,
+      tmCurrent.temp,
       wbCurrent && wbCurrent.data && wbCurrent.data[0] ? first(wbCurrent.data[0].temp, wbCurrent.data[0].app_temp) : null,
       owData && owData.main ? owData.main.temp : null,
       waCurr.temp_c
     );
 
-    var hourly = buildHourlyFromTomorrowAndPirate(tmHourly, prData, tz, currentTemp);
+    var hourly = buildHourlyFromOpenMeteo(omHourlyData, currentTemp);
     var timePeriods = buildTimePeriodsFromHourly(hourly, prData, tz);
     var dailyArray = buildDaily(accuData, omDaily7, wbDaily, vc7);
     var monthly = buildMonthly(vcMonthlyData, dailyArray);
@@ -1083,7 +1064,6 @@ app.get("/api/weather", async function (req, res) {
       dUv.push(dy.uv);
     }
 
-    // daylight tracker from WeatherAPI sunrise/sunset
     if (waData && waData.forecast && waData.forecast.forecastday && waData.forecast.forecastday.length) {
       var wf = waData.forecast.forecastday;
       if (wf[0] && wf[0].astro) {
