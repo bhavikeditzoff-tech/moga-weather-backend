@@ -68,6 +68,10 @@ function first() {
   return null;
 }
 
+function roundVal(v) {
+  return v == null || isNaN(v) ? null : Math.round(v);
+}
+
 function sf(url, label) {
   return fetch(url)
     .then(function (r) {
@@ -84,9 +88,7 @@ function sf(url, label) {
       return null;
     });
 }
-function roundVal(v) {
-  return v == null || isNaN(v) ? null : Math.round(v);
-}
+
 function c12to24(t) {
   if (!t) return "00:00:00";
   var p = t.split(" ");
@@ -224,7 +226,7 @@ function accuPhraseToWMO(text) {
   return 2;
 }
 
-/* ───── AQI ───── */
+/* ───── AQI / HELPERS ───── */
 
 function buildAQ(waData, wbDaily) {
   var values = [];
@@ -330,6 +332,16 @@ async function fetchTomorrowCurrent(loc) {
       "&fields=temperature,temperatureApparent,cloudCover,dewPoint,treeIndex,grassIndex,weedIndex" +
       "&timesteps=current&units=metric&apikey=" + TOMORROW_KEY,
     "Tomorrow-Current"
+  );
+}
+
+async function fetchTomorrowHourly(loc) {
+  if (!TOMORROW_KEY) return null;
+  return await sf(
+    "https://api.tomorrow.io/v4/timelines?location=" + loc.lat + "," + loc.lon +
+      "&fields=temperature,weatherCode" +
+      "&timesteps=1h&units=metric&apikey=" + TOMORROW_KEY,
+    "Tomorrow-Hourly"
   );
 }
 
@@ -476,9 +488,6 @@ async function fetchVisualCrossingMonthly(loc) {
 
 async function fetchMeteoblueCurrent(loc) {
   if (!METEOBLUE_API_KEY) return null;
-
-  // Using basic package endpoint style; if your exact plan uses different endpoint,
-  // we can adjust later from logs.
   return await sf(
     "https://my.meteoblue.com/packages/basic-1h?apikey=" + METEOBLUE_API_KEY +
       "&lat=" + loc.lat + "&lon=" + loc.lon + "&asl=0&format=json",
@@ -516,6 +525,62 @@ function parseTomorrowCurrent(tmData) {
   return vals;
 }
 
+function parseTomorrowHourly(tmData, tz) {
+  var out = {
+    time: [],
+    temperature_2m: [],
+    weather_code: [],
+    is_day: []
+  };
+
+  if (!tmData || !tmData.data || !tmData.data.timelines || !tmData.data.timelines.length) {
+    return out;
+  }
+
+  var intervals = tmData.data.timelines[0].intervals || [];
+  var nowEpoch = Math.floor(Date.now() / 1000);
+  var count = 0;
+
+  for (var i = 0; i < intervals.length && count < 8; i++) {
+    var it = intervals[i];
+    if (!it.startTime || !it.values) continue;
+
+    var epoch = Math.floor(new Date(it.startTime).getTime() / 1000);
+    if (epoch < nowEpoch - 3600) continue;
+
+    var localStr = epochToLocalISO(epoch, tz);
+    var localHour = parseInt(localStr.substring(11, 13));
+
+    out.time.push(localStr);
+    out.temperature_2m.push(roundVal(it.values.temperature));
+
+    var wc = it.values.weatherCode;
+    var mapped = 2;
+    if (wc === 1000 || wc === 0) mapped = 0;
+    else if (wc === 1100) mapped = 1;
+    else if (wc === 1101) mapped = 2;
+    else if (wc === 1102 || wc === 1001) mapped = 3;
+    else if (wc === 2000 || wc === 2100) mapped = 45;
+    else if (wc === 4000) mapped = 51;
+    else if (wc === 4001) mapped = 63;
+    else if (wc === 4200) mapped = 61;
+    else if (wc === 4201) mapped = 65;
+    else if (wc === 5000 || wc === 5100) mapped = 71;
+    else if (wc === 5001 || wc === 5101) mapped = 75;
+    else if (wc === 6000) mapped = 56;
+    else if (wc === 6001 || wc === 6201) mapped = 67;
+    else if (wc === 6200) mapped = 66;
+    else if (wc === 7000 || wc === 7101 || wc === 7102) mapped = 77;
+    else if (wc === 8000) mapped = 95;
+
+    out.weather_code.push(mapped);
+    out.is_day.push((localHour >= 6 && localHour < 18) ? 1 : 0);
+    count++;
+  }
+
+  return out;
+}
+
 function parseMeteoblueCurrent(mbData) {
   var out = {
     cloudCover: null,
@@ -524,14 +589,12 @@ function parseMeteoblueCurrent(mbData) {
 
   if (!mbData) return out;
 
-  // Try common meteoblue shapes
   if (mbData.data_1h && mbData.data_1h.cloudcover && mbData.data_1h.cloudcover.length) {
     out.cloudCover = mbData.data_1h.cloudcover[0];
   }
   if (mbData.data_1h && mbData.data_1h.cloud_ceiling && mbData.data_1h.cloud_ceiling.length) {
     out.cloudCeiling = mbData.data_1h.cloud_ceiling[0];
   }
-
   if (mbData.data && mbData.data.cloudcover && mbData.data.cloudcover.length) {
     out.cloudCover = first(out.cloudCover, mbData.data.cloudcover[0]);
   }
@@ -544,27 +607,27 @@ function parseMeteoblueCurrent(mbData) {
 
 /* ───── HOURLY ───── */
 
-function buildHourlyFromPirateAndWB(wbCurrent, prData, tz) {
+function buildHourlyFromTomorrowAndPirate(tmHourly, prData, tz, currentTemp) {
   var time = [], temp = [], code = [], isDay = [];
-  var nowEpoch = Math.floor(Date.now() / 1000);
 
-  if (wbCurrent && wbCurrent.data && wbCurrent.data.length) {
-    var c = wbCurrent.data[0];
-    var currentLocal = epochToLocalISO(nowEpoch, tz);
-    time.push(currentLocal);
-    temp.push(first(c.temp, c.app_temp));
-    code.push(wbCodeToWMO(c.weather ? c.weather.code : 800));
-    var currentHour = parseInt(currentLocal.substring(11, 13));
-    isDay.push((currentHour >= 6 && currentHour < 18) ? 1 : 0);
+  if (tmHourly && tmHourly.time && tmHourly.time.length) {
+    for (var i = 0; i < tmHourly.time.length; i++) {
+      time.push(tmHourly.time[i]);
+      temp.push(tmHourly.temperature_2m[i]);
+      code.push(tmHourly.weather_code[i]);
+      isDay.push(tmHourly.is_day[i]);
+    }
   }
 
   if (prData && prData.hourly && prData.hourly.data) {
     var existingKeys = {};
-    for (var i = 0; i < time.length; i++) {
-      existingKeys[time[i].substring(0, 13)] = true;
+    for (var e = 0; e < time.length; e++) {
+      existingKeys[time[e].substring(0, 13)] = true;
     }
 
     var ph = prData.hourly.data;
+    var nowEpoch = Math.floor(Date.now() / 1000);
+
     for (var j = 0; j < ph.length && time.length < 24; j++) {
       var pEpoch = ph[j].time || 0;
       if (pEpoch < nowEpoch) continue;
@@ -575,11 +638,15 @@ function buildHourlyFromPirateAndWB(wbCurrent, prData, tz) {
 
       var localHour = parseInt(localStr.substring(11, 13));
       time.push(localStr);
-      temp.push(ph[j].temperature);
+      temp.push(roundVal(ph[j].temperature));
       code.push(pirateToWMO(ph[j].icon));
       isDay.push((localHour >= 6 && localHour < 18) ? 1 : 0);
       existingKeys[hourKey] = true;
     }
+  }
+
+  if (temp.length && currentTemp != null) {
+    temp[0] = roundVal(currentTemp);
   }
 
   var combined = [];
@@ -803,6 +870,7 @@ function buildMonthly(vcMonthlyData, dailyArray) {
     for (var i = 0; i < vcMonthlyData.days.length; i++) {
       var d = vcMonthlyData.days[i];
       if (!d.datetime) continue;
+
       if (d.datetime <= today) {
         map[d.datetime] = {
           date: d.datetime,
@@ -891,6 +959,7 @@ app.get("/api/weather", async function (req, res) {
     var results = await Promise.all([
       fetchWeatherApi(loc),
       fetchTomorrowCurrent(loc),
+      fetchTomorrowHourly(loc),
       fetchWeatherbitCurrent(loc),
       fetchWeatherbitDaily(loc),
       fetchPirate(loc),
@@ -905,20 +974,22 @@ app.get("/api/weather", async function (req, res) {
 
     var waData = results[0];
     var tmCurrentData = results[1];
-    var wbCurrent = results[2];
-    var wbDaily = results[3];
-    var prData = results[4];
-    var owData = results[5];
-    var omCurrentData = results[6];
-    var omDaily7 = results[7];
-    var accuData = results[8];
-    var vcMonthlyData = results[9];
-    var vc7 = results[10];
-    var meteoblueData = results[11];
+    var tmHourlyData = results[2];
+    var wbCurrent = results[3];
+    var wbDaily = results[4];
+    var prData = results[5];
+    var owData = results[6];
+    var omCurrentData = results[7];
+    var omDaily7 = results[8];
+    var accuData = results[9];
+    var vcMonthlyData = results[10];
+    var vc7 = results[11];
+    var meteoblueData = results[12];
 
     console.log(
       "API Status — WA:", !!waData,
       "TM:", !!tmCurrentData,
+      "TMH:", !!tmHourlyData,
       "WBC:", !!wbCurrent,
       "WBD:", !!wbDaily,
       "PR:", !!prData,
@@ -940,26 +1011,18 @@ app.get("/api/weather", async function (req, res) {
     var tz = waLoc.tz_id || (omCurrentData ? omCurrentData.timezone : null) || "UTC";
 
     var tmCurrent = parseTomorrowCurrent(tmCurrentData);
-    console.log("Tomorrow raw:", JSON.stringify(tmCurrentData).substring(0, 1500));
-    console.log("Tomorrow parsed:", tmCurrent);
+    var tmHourly = parseTomorrowHourly(tmHourlyData, tz);
     var mbCurrent = parseMeteoblueCurrent(meteoblueData);
-    console.log("Meteoblue raw:", JSON.stringify(meteoblueData).substring(0, 1500));
-    console.log("Meteoblue parsed:", mbCurrent);
-    var hourly = buildHourlyFromPirateAndWB(wbCurrent, prData, tz);
 
     var currentTemp = first(
       tmCurrent.temp,
       omCurrentData && omCurrentData.current ? omCurrentData.current.temperature_2m : null,
-      hourly.temperature_2m && hourly.temperature_2m.length ? hourly.temperature_2m[0] : null,
       wbCurrent && wbCurrent.data && wbCurrent.data[0] ? first(wbCurrent.data[0].temp, wbCurrent.data[0].app_temp) : null,
       owData && owData.main ? owData.main.temp : null,
       waCurr.temp_c
     );
 
-    if (hourly.temperature_2m && hourly.temperature_2m.length && currentTemp != null) {
-      hourly.temperature_2m[0] = roundVal(currentTemp);
-    }
-
+    var hourly = buildHourlyFromTomorrowAndPirate(tmHourly, prData, tz, currentTemp);
     var timePeriods = buildTimePeriodsFromHourly(hourly, prData, tz);
     var dailyArray = buildDaily(accuData, omDaily7, wbDaily, vc7);
     var monthly = buildMonthly(vcMonthlyData, dailyArray);
@@ -1006,7 +1069,7 @@ app.get("/api/weather", async function (req, res) {
       dew_point: roundVal(tmCurrent.dewPoint),
       pollen_count: roundVal(first(tmCurrent.treePollen, tmCurrent.grassPollen, tmCurrent.weedPollen))
     };
-    console.log("Sky metrics final:", skyMetrics);
+
     var dTime = [], dCode = [], dMax = [], dMin = [], dPrecip = [], dSunrise = [], dSunset = [], dUv = [];
     for (var i = 0; i < dailyArray.length; i++) {
       var dy = dailyArray[i];
@@ -1020,7 +1083,7 @@ app.get("/api/weather", async function (req, res) {
       dUv.push(dy.uv);
     }
 
-    // daylight tracker from WeatherAPI
+    // daylight tracker from WeatherAPI sunrise/sunset
     if (waData && waData.forecast && waData.forecast.forecastday && waData.forecast.forecastday.length) {
       var wf = waData.forecast.forecastday;
       if (wf[0] && wf[0].astro) {
@@ -1089,7 +1152,7 @@ app.get("/api/weather", async function (req, res) {
       "=== Done. Hourly:", hourly.time.length,
       "Daily:", dTime.length,
       "Monthly:", monthly.length,
-      "CurrentTemp:", currentTemp,
+      "CurrentTemp:", result.current.temperature_c,
       "RealFeel:", result.current.feelslike_c,
       "===\n"
     );
