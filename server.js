@@ -568,11 +568,12 @@ app.get("/api/weather", async function (req, res) {
     // Hourly
     var hourly = buildHourlyFromWeatherbit(wbHourly);
     hourly = extendHourlyWithPirate(hourly, prData, tz);
-
+    if (hourly.temperature_2m && hourly.temperature_2m.length && owData && owData.main && owData.main.temp != null) {
+      hourly.temperature_2m[0] = owData.main.temp;
+    }
     // Current temp should match hourly NOW card exactly
-    var currentTemp = first(
-      hourly.temperature_2m && hourly.temperature_2m.length ? hourly.temperature_2m[0] : null,
-      wbHourly && wbHourly.data && wbHourly.data[0] ? first(wbHourly.data[0].temp, wbHourly.data[0].app_temp) : null,
+     var currentTemp = first(
+      owData && owData.main ? owData.main.temp : null,
       waCurr.temp_c
     );
 
@@ -648,7 +649,10 @@ app.get("/api/weather", async function (req, res) {
         weather_code: waCodeToWMO(waCurr.condition ? waCurr.condition.code : 1000),
         condition_text: waCurr.condition ? waCurr.condition.text : null,
         is_day: first(waCurr.is_day, 1),
-        feelslike_c: first(waCurr.feelslike_c),
+        feelslike_c: first(
+          owData && owData.main ? owData.main.feels_like : null,
+          waCurr.feelslike_c
+        ),
         humidity: humidity,
         wind_kph: first(waCurr.wind_kph),
         wind_degree: first(waCurr.wind_degree),
