@@ -725,9 +725,19 @@ app.get("/api/weather", async function (req, res) {
     var checkwxCeilingFeet = parseCheckWXCeiling(checkwxData);
     var accuPollen         = parseAccuPollen(accuData);
 
-    // Current conditions — all from WeatherAPI
-    var currentTemp   = first(waCurr.temp_c);
-    var weatherCode   = waCodeToWMO(waCurr.condition ? waCurr.condition.code : 1000);
+   // Current conditions — Pirate Weather primary, WeatherAPI as fallback
+    var pirCurr = prData && prData.currently ? prData.currently : {};
+
+    var currentTemp = first(
+      pirCurr.temperature,
+      waCurr.temp_c
+    );
+
+    var weatherCode = first(
+      pirateToWMO(pirCurr.icon),
+      waCodeToWMO(waCurr.condition ? waCurr.condition.code : null)
+    );
+
     var currentIsDay  = first(waCurr.is_day, getIsDayNow(tz));
     var conditionText = getWeatherText(weatherCode, currentIsDay);
 
