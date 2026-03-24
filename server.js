@@ -390,27 +390,139 @@ async function fetchAndBuildMonthly(loc,dailyArray){
   return Object.values(map).sort(function(a,b){return new Date(a.date)-new Date(b.date);});
 }
 
-/* ───── RECOMMENDATIONS (Gemini) ───── */
+/* ═══════════════════════════════════════════════════
+   LLM PROVIDERS
+═══════════════════════════════════════════════════ */
+
+async function callGroq(messages, systemPrompt, maxTokens) {
+  var msgs = [{ role: "system", content: systemPrompt }].concat(messages);
+  var resp = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + GROQ_KEY },
+    body: JSON.stringify({
+      model: "llama-3.3-70b-versatile",
+      messages: msgs,
+      max_tokens: maxTokens || 1024,
+      temperature: 0.7
+    })
+  });
+  if (!resp.ok) {
+    var t = await resp.text();
+    throw new Error("Groq HTTP " + resp.status + ": " + t.substring(0, 200));
+  }
+  var data = await resp.json();
+  return data.choices[0].message.content;
+}
+
+async function callCerebras(messages, systemPrompt, maxTokens) {
+  var msgs = [{ role: "system", content: systemPrompt }].concat(messages);
+  var resp = await fetch("https://api.cerebras.ai/v1/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + CEREBRAS_KEY },
+    body: JSON.stringify({
+      model: "llama-3.3-70b",
+      messages: msgs,
+      max_tokens: maxTokens || 1024,
+      temperature: 0.7
+    })
+  });
+  if (!resp.ok) {
+    var t = await resp.text();
+    throw new Error("Cerebras HTTP " + resp.status + ": " + t.substring(0, 200));
+  }
+  var data = await resp.json();
+  return data.choices[0].message.content;
+}
+
+async function callAPIFreeLLM(messages, systemPrompt, maxTokens) {
+  var msgs = [{ role: "system", content: systemPrompt }].concat(messages);
+  var resp = await fetch("https://api.apifree.llm/v1/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + APIFREELLM_KEY },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      messages: msgs,
+      max_tokens: maxTokens || 1024,
+      temperature: 0.7
+    })
+  });
+  if (!resp.ok) {
+    var t = await resp.text();
+    throw new Error("APIFreeLLM HTTP " + resp.status + ": " + t.substring(0, 200));
+  }
+  var data = await resp.json();
+  return data.choices[0].message.content;
+}
+
+async function callLLM(messages, systemPrompt, maxTokens) {
+  var errors = [];
+
+  try {
+    console.log("Trying Groq...");
+    var result = await callGroq(messages, systemPrompt, maxTokens);
+    console.log("Groq OK");
+    return { text: result };
+  } catch(e) {
+    console.log("Groq failed:", e.message);
+    errors.push("Groq: " + e.message);
+  }
+
+  try {
+    console.log("Trying Cerebras...");
+    var result = await callCerebras(messages, systemPrompt, maxTokens);
+    console.log("Cerebras OK");
+    return { text: result };
+  } catch(e) {
+    console.log("Cerebras failed:", e.message);
+    errors.push("Cerebras: " + e.message);
+  }
+
+  try {
+    console.log("Trying APIFreeLLM...");
+    var result = await callAPIFreeLLM(messages, systemPrompt, maxTokens);
+    console.log("APIFreeLLM OK");
+    return { text: result };
+  } catch(e) {
+    console.log("APIFreeLLM failed:", e.message);
+    errors.push("APIFreeLLM: " + e.message);
+  }
+
+  throw new Error("All AI providers failed: " + errors.join("; "));
+}
+
+/* ───── RECOMMENDATIONS (Groq/Cerebras — NOT Gemini) ───── */
 async function buildRecommendations(payload){
   var cacheKey=(payload.locationName||"")+(payload.conditionText||"")+(payload.currentTemp||"");
   var cached=getCached(recommendationsCache,cacheKey,RECOMMENDATIONS_CACHE_MS);
   if(cached)return cached;
-  try{
-    var prompt="You are a friendly weather assistant. Write 6-8 short natural recommendations for someone planning their day. Each is one sentence. Be specific, warm, practical. Vary tones. Return ONLY a JSON array of strings.\n\nWeather:\n- Location: "+(payload.locationName||"Unknown")+"\n- Temp: "+(payload.currentTemp!=null?payload.currentTemp+"°C":"Unknown")+"\n- Feels: "+(payload.realFeel!=null?payload.realFeel+"°C":"Unknown")+"\n- Condition: "+(payload.conditionText||"Unknown")+"\n- Humidity: "+(payload.humidity!=null?payload.humidity+"%":"Unknown")+"\n- Wind: "+(payload.wind!=null?payload.wind+" km/h":"Unknown")+"\n- Rain: "+(payload.rainChance!=null?payload.rainChance+"%":"Unknown")+"\n- UV: "+(payload.uv!=null?payload.uv:"Unknown")+"\n- AQI: "+(payload.aqi!=null?payload.aqi:"Unknown")+"\n- Sunset: "+(payload.sunsetText||"Unknown");
-    var resp=await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key="+GEMINI_KEY,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{temperature:0.8,maxOutputTokens:1024}})});
-    if(!resp.ok)throw new Error("Gemini HTTP "+resp.status);
-    var data=await resp.json();
-    var text=data.candidates&&data.candidates[0]&&data.candidates[0].content&&data.candidates[0].content.parts&&data.candidates[0].content.parts[0]?data.candidates[0].content.parts[0].text:"";
-    text=text.replace(/```json|```/g,"").trim();
-    var parsed=JSON.parse(text);
-    if(Array.isArray(parsed)&&Array.isArray(parsed[0]))parsed=parsed[0];
-    parsed=parsed.map(function(r){return typeof r==="string"?r:(r.text||r.recommendation||r.message||JSON.stringify(r));});
-    if(parsed.length){var result=parsed.slice(0,8);setCached(recommendationsCache,cacheKey,result);return result;}
-  }catch(e){console.log("Gemini ERR:",e.message);}
+
+  var prompt = "You are a friendly weather assistant. Write 6-8 short natural recommendations for someone planning their day. Each is one sentence. Be specific, warm, practical. Vary tones. Return ONLY a JSON array of strings with no markdown, no preamble, no backticks.\n\nWeather:\n- Location: "+(payload.locationName||"Unknown")+"\n- Temp: "+(payload.currentTemp!=null?payload.currentTemp+"°C":"Unknown")+"\n- Feels: "+(payload.realFeel!=null?payload.realFeel+"°C":"Unknown")+"\n- Condition: "+(payload.conditionText||"Unknown")+"\n- Humidity: "+(payload.humidity!=null?payload.humidity+"%":"Unknown")+"\n- Wind: "+(payload.wind!=null?payload.wind+" km/h":"Unknown")+"\n- Rain: "+(payload.rainChance!=null?payload.rainChance+"%":"Unknown")+"\n- UV: "+(payload.uv!=null?payload.uv:"Unknown")+"\n- AQI: "+(payload.aqi!=null?payload.aqi:"Unknown")+"\n- Sunset: "+(payload.sunsetText||"Unknown");
+
+  try {
+    var result = await callLLM([{ role: "user", content: prompt }], "You are a weather assistant. Respond ONLY with a valid JSON array of strings. No markdown, no extra text.", 512);
+    var text = result.text.replace(/```json|```/g,"").trim();
+    // Find the JSON array
+    var match = text.match(/\[[\s\S]*\]/);
+    if (match) {
+      var parsed = JSON.parse(match[0]);
+      if (Array.isArray(parsed)) {
+        var clean = parsed.map(function(r) {
+          return typeof r === "string" ? r : (r.text || r.recommendation || r.message || JSON.stringify(r));
+        }).filter(Boolean);
+        if (clean.length) {
+          var result2 = clean.slice(0, 8);
+          setCached(recommendationsCache, cacheKey, result2);
+          return result2;
+        }
+      }
+    }
+  } catch(e) { console.log("Recommendations LLM ERR:", e.message); }
+
   return buildRecommendationsFallback(payload);
 }
+
 function buildRecommendationsFallback(payload){
-  var recs=[],temp=payload.currentTemp,rain=payload.rainChance,uv=payload.uv,aqi=payload.aqi,wind=payload.wind,thunder=payload.thunderProbability,humidity=payload.humidity,visibility=payload.visibilityKm;
+  var recs=[],temp=payload.currentTemp,rain=payload.rainChance,uv=payload.uv,aqi=payload.aqi,wind=payload.wind;
   if(temp!=null){
     if(temp>=35)recs.push("It's extremely hot — avoid long exposure and stay hydrated.");
     else if(temp>=30)recs.push("A warm day ahead — light clothing and water will help.");
@@ -426,6 +538,250 @@ function buildRecommendationsFallback(payload){
   if(!recs.length)recs.push("Weather looks fairly stable right now — enjoy your day!");
   return recs;
 }
+
+/* ═══════════════════════════════════════════════════
+   AI CHAT SYSTEM
+═══════════════════════════════════════════════════ */
+
+/* ── Web Search (Tavily + Exa) ── */
+async function tavilySearch(query) {
+  try {
+    var resp = await fetch("https://api.tavily.com/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_key: TAVILY_KEY,
+        query: query,
+        search_depth: "advanced",
+        max_results: 5,
+        include_answer: true,
+        include_raw_content: false
+      })
+    });
+    if (!resp.ok) throw new Error("Tavily HTTP " + resp.status);
+    var data = await resp.json();
+    var results = [];
+    if (data.answer) results.push({ title: "Summary", content: data.answer, url: "" });
+    (data.results || []).forEach(function(r) {
+      results.push({ title: r.title || "", content: r.content || "", url: r.url || "" });
+    });
+    return results;
+  } catch(e) {
+    console.log("Tavily ERR:", e.message);
+    return null;
+  }
+}
+
+async function exaSearch(query) {
+  try {
+    var resp = await fetch("https://api.exa.ai/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": EXA_KEY },
+      body: JSON.stringify({
+        query: query,
+        numResults: 4,
+        useAutoprompt: true,
+        contents: { text: { maxCharacters: 800 } }
+      })
+    });
+    if (!resp.ok) throw new Error("Exa HTTP " + resp.status);
+    var data = await resp.json();
+    return (data.results || []).map(function(r) {
+      return { title: r.title || "", content: (r.text || "").substring(0, 800), url: r.url || "" };
+    });
+  } catch(e) {
+    console.log("Exa ERR:", e.message);
+    return null;
+  }
+}
+
+async function webSearch(query) {
+  console.log("Web search:", query);
+  var results = await tavilySearch(query);
+  if (!results || !results.length) results = await exaSearch(query);
+  return results || [];
+}
+
+function formatSearchResults(results) {
+  if (!results || !results.length) return "No search results found.";
+  return results.map(function(r, i) {
+    return "Source " + (i+1) + ": " + r.title + "\n" + r.content + (r.url ? "\nURL: " + r.url : "");
+  }).join("\n\n---\n\n");
+}
+
+/* ── Personality instructions ── */
+function getPersonalityInstruction(pid) {
+  var map = {
+    friendly:     "You are warm, encouraging, and conversational. Use friendly language and occasional emojis. Make the user feel good about their day.",
+    professional: "You are a professional meteorologist. Be scientific, use precise terminology, provide detailed analysis. Reference atmospheric conditions accurately.",
+    witty:        "You are witty and playful. Use clever weather puns, light humor, and fun observations. Keep it entertaining while still being helpful.",
+    zen:          "You are calm and mindful. Speak poetically about weather, find beauty in all conditions. Use peaceful, grounding language.",
+    explorer:     "You are an adventure scout. Focus on outdoor activities, challenges, and opportunities. Be energetic and bold. Inspire action.",
+    detective:    "You are analytically curious. Break down weather patterns like clues, explain causes and effects. Ask probing follow-up questions.",
+    chef:         "You pair weather with food and mood. Suggest meals, drinks, and cooking activities based on weather. Make weather feel delicious.",
+    coach:        "You are a motivational fitness coach. Focus on exercise opportunities, workout suggestions, and keeping the user active regardless of weather.",
+    poetic:       "You speak in lyrical, descriptive language. Paint vivid pictures of the sky and weather. Find metaphors and beauty in every condition.",
+    minimal:      "Be extremely concise. No fluff. Direct answers only. Use bullet points when listing things. Short sentences."
+  };
+  return map[pid] || map["friendly"];
+}
+
+/* ── /api/chat endpoint ── */
+app.post("/api/chat", async function(req, res) {
+  try {
+    var messages = req.body.messages || [];
+    var fullWeatherContext = req.body.fullWeatherContext || null;
+    var locationName = req.body.locationName || "Unknown location";
+    var enableWebSearch = req.body.enableWebSearch || false;
+    var personality = req.body.personality || "friendly";
+    var userPreferences = req.body.userPreferences || {};
+
+    if (!messages.length) {
+      return res.status(400).json({ error: "No messages provided" });
+    }
+
+    var lastUserMessage = "";
+    for (var i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === "user") { lastUserMessage = messages[i].content; break; }
+    }
+
+    // Web search ONLY if explicitly enabled by client (user asked to search)
+    var searchResults = null;
+    var didSearch = false;
+
+    if (enableWebSearch && lastUserMessage) {
+      searchResults = await webSearch(lastUserMessage);
+      didSearch = true;
+      console.log("Web searched:", lastUserMessage, "- got", (searchResults||[]).length, "results");
+    }
+
+    // Build comprehensive weather context string
+    var weatherSection = "";
+    if (fullWeatherContext) {
+      var wc = fullWeatherContext;
+      var curr = wc.current || {};
+      var aq = wc.air_quality || {};
+      var sky = wc.sky_metrics || {};
+
+      weatherSection = "\n\n=== COMPLETE WEATHER DATA FOR " + (wc.location || locationName).toUpperCase() + " ===\n";
+
+      weatherSection += "\nCURRENT CONDITIONS:\n" +
+        "- Temperature: " + (curr.temperature_c != null ? curr.temperature_c + "°C" : "N/A") + "\n" +
+        "- Feels Like: " + (curr.feels_like_c != null ? curr.feels_like_c + "°C" : "N/A") + "\n" +
+        "- Condition: " + (curr.condition || "N/A") + "\n" +
+        "- Humidity: " + (curr.humidity_percent != null ? curr.humidity_percent + "%" : "N/A") + "\n" +
+        "- Wind: " + (curr.wind_kph != null ? curr.wind_kph + " km/h " + (curr.wind_direction || "") : "N/A") + "\n" +
+        "- Pressure: " + (curr.pressure_hpa != null ? curr.pressure_hpa + " hPa" : "N/A") + "\n" +
+        "- Visibility: " + (curr.visibility_km != null ? curr.visibility_km + " km" : "N/A") + "\n" +
+        "- Rain Chance: " + (curr.rain_chance_percent != null ? curr.rain_chance_percent + "%" : "N/A") + "\n" +
+        "- UV Index: " + (curr.uv_index != null ? curr.uv_index + " (" + (curr.uv_description || "") + ")" : "N/A");
+
+      weatherSection += "\n\nAIR QUALITY:\n" +
+        "- PM2.5: " + (aq.pm25 != null ? aq.pm25 : "N/A") + "\n" +
+        "- AQI: " + (aq.aqi != null ? aq.aqi : "N/A") + "\n" +
+        "- Status: " + (aq.label || "N/A") + "\n" +
+        "- Advice: " + (aq.advice || "N/A");
+
+      weatherSection += "\n\nSKY & ATMOSPHERIC METRICS:\n" +
+        "- RealFeel Shade: " + (sky.realfeel_shade_c != null ? sky.realfeel_shade_c + "°C" : "N/A") + "\n" +
+        "- Cloud Cover: " + (sky.cloud_cover_percent != null ? sky.cloud_cover_percent + "%" : "N/A") + "\n" +
+        "- Cloud Base: " + (sky.cloud_base_km != null ? sky.cloud_base_km + " km" : "N/A") + "\n" +
+        "- Thunder Probability: " + (sky.thunder_probability_percent != null ? sky.thunder_probability_percent + "%" : "N/A") + "\n" +
+        "- Dew Point: " + (sky.dew_point_c != null ? sky.dew_point_c + "°C" : "N/A") + "\n" +
+        "- Pollen Count: " + (sky.pollen_count != null ? sky.pollen_count : "N/A");
+
+      // Time periods
+      if (wc.todays_periods && wc.todays_periods.length) {
+        weatherSection += "\n\nTODAY'S PERIODS:\n";
+        wc.todays_periods.forEach(function(p) {
+          weatherSection += "- " + p.name + ": " + (p.temp != null ? p.temp + "°C" : "") + " " + p.condition + (p.rain_chance != null ? " (" + p.rain_chance + "% rain)" : "") + "\n";
+        });
+      }
+
+      // Hourly (condensed — every 3h to save tokens)
+      if (wc.hourly_next_24h && wc.hourly_next_24h.length) {
+        weatherSection += "\nHOURLY FORECAST (next 24h):\n";
+        for (var h = 0; h < wc.hourly_next_24h.length; h += 3) {
+          var hr = wc.hourly_next_24h[h];
+          weatherSection += hr.time + ": " + (hr.temp != null ? hr.temp + "°C" : "") + " " + hr.condition + "\n";
+        }
+      }
+
+      // 7-day
+      if (wc.weekly_forecast && wc.weekly_forecast.length) {
+        weatherSection += "\n7-DAY FORECAST:\n";
+        wc.weekly_forecast.forEach(function(d) {
+          weatherSection += "- " + d.label + " (" + d.date + "): " + d.condition +
+            (d.max_temp != null ? " High " + d.max_temp + "°C" : "") +
+            (d.min_temp != null ? " / Low " + d.min_temp + "°C" : "") +
+            (d.rain_chance != null ? " | Rain " + d.rain_chance + "%" : "") +
+            (d.uv != null ? " | UV " + d.uv : "") + "\n";
+        });
+      }
+
+      // Monthly summary
+      if (wc.monthly_forecast && wc.monthly_forecast.length) {
+        weatherSection += "\nMONTHLY FORECAST (this month so far + coming days):\n";
+        wc.monthly_forecast.forEach(function(d) {
+          weatherSection += "- " + d.date + ": " + d.condition +
+            (d.max_temp != null ? " " + d.max_temp + "°C" : "") +
+            (d.min_temp != null ? "/" + d.min_temp + "°C" : "") + "\n";
+        });
+      }
+
+      // Recommendations
+      if (wc.recommendations && wc.recommendations.length) {
+        weatherSection += "\nCURRENT RECOMMENDATIONS FOR USER:\n";
+        wc.recommendations.forEach(function(r, i) { weatherSection += (i+1) + ". " + r + "\n"; });
+      }
+
+      weatherSection += "\n=== END WEATHER DATA ===";
+    }
+
+    // User preferences section
+    var prefSection = "";
+    if (userPreferences && Object.keys(userPreferences).length) {
+      prefSection = "\n\nKNOWN USER PREFERENCES (learned from conversation):\n";
+      if (userPreferences.likes_rain === true)  prefSection += "- Enjoys rainy weather\n";
+      if (userPreferences.likes_rain === false) prefSection += "- Dislikes rain\n";
+      if (userPreferences.likes_sun === true)   prefSection += "- Loves sunny/warm weather\n";
+      if (userPreferences.likes_sun === false)  prefSection += "- Dislikes heat\n";
+      if (userPreferences.likes_cold === true)  prefSection += "- Enjoys cold weather\n";
+      if (userPreferences.likes_cold === false) prefSection += "- Dislikes cold\n";
+      if (userPreferences.outdoor_person)       prefSection += "- Active/outdoor-focused person\n";
+      if (userPreferences.indoor_person)        prefSection += "- Prefers indoor activities\n";
+    }
+
+    // Web search results
+    var searchSection = "";
+    if (searchResults && searchResults.length) {
+      searchSection = "\n\nWEB SEARCH RESULTS:\n" + formatSearchResults(searchResults);
+    }
+
+    var now = new Date();
+    var systemPrompt = "You are RealWeather, a deeply knowledgeable weather intelligence built into the RealWeather app. " +
+      "You have full access to real-time weather data, forecasts, air quality, sky metrics, and hourly/daily/monthly weather data for the user's location — all provided below. " +
+      "NEVER say you lack access to weather data, cannot provide real-time information, or that you're an AI model. You ARE RealWeather — you have all the data. " +
+      "Use the weather data provided to answer ALL weather questions directly and confidently. " +
+      "You can answer non-weather questions too — you're a general assistant. " +
+      "Today is " + now.toDateString() + ". The user is in " + locationName + ".\n\n" +
+      "PERSONALITY STYLE: " + getPersonalityInstruction(personality) +
+      weatherSection +
+      prefSection +
+      searchSection;
+
+    var llmResult = await callLLM(messages, systemPrompt, 1024);
+
+    res.json({
+      reply: llmResult.text,
+      searched: didSearch
+    });
+
+  } catch(e) {
+    console.log("Chat ERR:", e.message);
+    res.status(500).json({ error: e.message || "Chat failed" });
+  }
+});
 
 /* ───── LOCATION RESOLUTION ───── */
 async function resolveIp(){
@@ -498,275 +854,6 @@ function buildAQ(waData){
   try{if(waData&&waData.current&&waData.current.air_quality&&waData.current.air_quality.pm2_5!=null)return waData.current.air_quality.pm2_5;}catch(e){}
   return null;
 }
-
-/* ═══════════════════════════════════════════════════
-   AI CHAT SYSTEM
-═══════════════════════════════════════════════════ */
-
-/* ── Web Search (Tavily + Exa) ── */
-async function tavilySearch(query) {
-  try {
-    var resp = await fetch("https://api.tavily.com/search", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        api_key: TAVILY_KEY,
-        query: query,
-        search_depth: "advanced",
-        max_results: 5,
-        include_answer: true,
-        include_raw_content: false
-      })
-    });
-    if (!resp.ok) throw new Error("Tavily HTTP " + resp.status);
-    var data = await resp.json();
-    var results = [];
-    if (data.answer) results.push({ title: "Summary", content: data.answer, url: "" });
-    (data.results || []).forEach(function(r) {
-      results.push({ title: r.title || "", content: r.content || "", url: r.url || "" });
-    });
-    return results;
-  } catch(e) {
-    console.log("Tavily ERR:", e.message);
-    return null;
-  }
-}
-
-async function exaSearch(query) {
-  try {
-    var resp = await fetch("https://api.exa.ai/search", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-api-key": EXA_KEY },
-      body: JSON.stringify({
-        query: query,
-        numResults: 4,
-        useAutoprompt: true,
-        contents: { text: { maxCharacters: 800 } }
-      })
-    });
-    if (!resp.ok) throw new Error("Exa HTTP " + resp.status);
-    var data = await resp.json();
-    return (data.results || []).map(function(r) {
-      return { title: r.title || "", content: (r.text || "").substring(0, 800), url: r.url || "" };
-    });
-  } catch(e) {
-    console.log("Exa ERR:", e.message);
-    return null;
-  }
-}
-
-async function webSearch(query) {
-  console.log("Web search:", query);
-  // Try Tavily first, fall back to Exa
-  var results = await tavilySearch(query);
-  if (!results || !results.length) results = await exaSearch(query);
-  return results || [];
-}
-
-function formatSearchResults(results) {
-  if (!results || !results.length) return "No search results found.";
-  return results.map(function(r, i) {
-    return "Source " + (i+1) + ": " + r.title + "\n" + r.content + (r.url ? "\nURL: " + r.url : "");
-  }).join("\n\n---\n\n");
-}
-
-/* ── Should we search the web? ── */
-function needsWebSearch(message) {
-  var msg = message.toLowerCase();
-  var searchTriggers = [
-    "latest","recent","current","today","now","news","update","happening",
-    "2024","2025","2026","price","stock","score","result","win","who is",
-    "what is","how to","when did","where is","weather in","forecast for",
-    "temperature in"
-  ];
-  return searchTriggers.some(function(t) { return msg.indexOf(t) >= 0; });
-}
-
-/* ── LLM Providers ── */
-async function callGroq(messages, systemPrompt) {
-  var msgs = [{ role: "system", content: systemPrompt }].concat(messages);
-  var resp = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + GROQ_KEY },
-    body: JSON.stringify({
-      model: "llama-3.3-70b-versatile",
-      messages: msgs,
-      max_tokens: 1024,
-      temperature: 0.7
-    })
-  });
-  if (!resp.ok) {
-    var t = await resp.text();
-    throw new Error("Groq HTTP " + resp.status + ": " + t.substring(0, 200));
-  }
-  var data = await resp.json();
-  return data.choices[0].message.content;
-}
-
-async function callCerebras(messages, systemPrompt) {
-  var msgs = [{ role: "system", content: systemPrompt }].concat(messages);
-  var resp = await fetch("https://api.cerebras.ai/v1/chat/completions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + CEREBRAS_KEY },
-    body: JSON.stringify({
-      model: "llama-3.3-70b",
-      messages: msgs,
-      max_tokens: 1024,
-      temperature: 0.7
-    })
-  });
-  if (!resp.ok) {
-    var t = await resp.text();
-    throw new Error("Cerebras HTTP " + resp.status + ": " + t.substring(0, 200));
-  }
-  var data = await resp.json();
-  return data.choices[0].message.content;
-}
-
-async function callAPIFreeLLM(messages, systemPrompt) {
-  var msgs = [{ role: "system", content: systemPrompt }].concat(messages);
-  var resp = await fetch("https://api.apifree.llm/v1/chat/completions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + APIFREELLM_KEY },
-    body: JSON.stringify({
-      model: "gpt-4o-mini",
-      messages: msgs,
-      max_tokens: 1024,
-      temperature: 0.7
-    })
-  });
-  if (!resp.ok) {
-    var t = await resp.text();
-    throw new Error("APIFreeLLM HTTP " + resp.status + ": " + t.substring(0, 200));
-  }
-  var data = await resp.json();
-  return data.choices[0].message.content;
-}
-
-async function callLLM(messages, systemPrompt) {
-  // Try Groq first, then Cerebras, then APIFreeLLM
-  var errors = [];
-
-  try {
-    console.log("Trying Groq...");
-    var result = await callGroq(messages, systemPrompt);
-    console.log("Groq OK");
-    return { text: result, provider: "Groq" };
-  } catch(e) {
-    console.log("Groq failed:", e.message);
-    errors.push("Groq: " + e.message);
-  }
-
-  try {
-    console.log("Trying Cerebras...");
-    var result = await callCerebras(messages, systemPrompt);
-    console.log("Cerebras OK");
-    return { text: result, provider: "Cerebras" };
-  } catch(e) {
-    console.log("Cerebras failed:", e.message);
-    errors.push("Cerebras: " + e.message);
-  }
-
-  try {
-    console.log("Trying APIFreeLLM...");
-    var result = await callAPIFreeLLM(messages, systemPrompt);
-    console.log("APIFreeLLM OK");
-    return { text: result, provider: "APIFreeLLM" };
-  } catch(e) {
-    console.log("APIFreeLLM failed:", e.message);
-    errors.push("APIFreeLLM: " + e.message);
-  }
-
-  throw new Error("All AI providers failed: " + errors.join("; "));
-}
-
-/* ── /api/chat endpoint ── */
-app.post("/api/chat", async function(req, res) {
-  try {
-    var messages = req.body.messages || [];
-    var weatherContext = req.body.weatherContext || null;
-    var locationName = req.body.locationName || "Unknown location";
-
-    if (!messages.length) {
-      return res.status(400).json({ error: "No messages provided" });
-    }
-
-    var lastUserMessage = "";
-    for (var i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === "user") { lastUserMessage = messages[i].content; break; }
-    }
-
-    // Decide if we need web search
-    var searchResults = null;
-    var searchQuery = null;
-    var didSearch = false;
-
-    if (needsWebSearch(lastUserMessage)) {
-      searchQuery = lastUserMessage;
-      // If it's a weather question, append location
-      if (/weather|forecast|rain|temperature|humidity|wind/i.test(lastUserMessage) && locationName) {
-        if (lastUserMessage.toLowerCase().indexOf(locationName.toLowerCase()) === -1) {
-          searchQuery = lastUserMessage + " " + locationName;
-        }
-      }
-      searchResults = await webSearch(searchQuery);
-      didSearch = true;
-      console.log("Searched for:", searchQuery, "- got", searchResults.length, "results");
-    }
-
-    // Build system prompt
-    var now = new Date();
-    var systemPrompt = "You are RealWeather AI, a smart, friendly weather and general assistant embedded in the RealWeather app. " +
-      "You can answer weather questions, help plan activities around weather, and answer general knowledge questions. " +
-      "Be conversational, helpful, and concise. Use markdown for formatting when helpful (bold, lists, etc). " +
-      "Today is " + now.toDateString() + ". " +
-      "The user's current location is " + locationName + ". ";
-
-    if (weatherContext) {
-      systemPrompt += "\n\nCurrent weather at " + locationName + ":\n" +
-        "- Temperature: " + (weatherContext.temp != null ? weatherContext.temp + "°C" : "Unknown") + "\n" +
-        "- Feels like: " + (weatherContext.feelsLike != null ? weatherContext.feelsLike + "°C" : "Unknown") + "\n" +
-        "- Condition: " + (weatherContext.condition || "Unknown") + "\n" +
-        "- Humidity: " + (weatherContext.humidity != null ? weatherContext.humidity + "%" : "Unknown") + "\n" +
-        "- Wind: " + (weatherContext.wind != null ? weatherContext.wind + " km/h" : "Unknown") + "\n" +
-        "- UV Index: " + (weatherContext.uv != null ? weatherContext.uv : "Unknown") + "\n" +
-        "- Rain chance: " + (weatherContext.rainChance != null ? weatherContext.rainChance + "%" : "Unknown") + "\n" +
-        "- AQI: " + (weatherContext.aqi != null ? weatherContext.aqi : "Unknown");
-    }
-
-    if (searchResults && searchResults.length) {
-      systemPrompt += "\n\nWeb search results for \"" + searchQuery + "\":\n\n" + formatSearchResults(searchResults) +
-        "\n\nUse these results to inform your answer. Cite sources when relevant.";
-    }
-
-    var llmResult = await callLLM(messages, systemPrompt);
-
-    res.json({
-      reply: llmResult.text,
-      provider: llmResult.provider,
-      searched: didSearch,
-      searchQuery: searchQuery || null,
-      searchResultCount: searchResults ? searchResults.length : 0
-    });
-
-  } catch(e) {
-    console.log("Chat ERR:", e.message);
-    res.status(500).json({ error: e.message || "Chat failed" });
-  }
-});
-
-/* ── /api/search-ai endpoint (standalone web search) ── */
-app.post("/api/search-ai", async function(req, res) {
-  try {
-    var query = (req.body.query || "").trim();
-    if (!query) return res.status(400).json({ error: "No query" });
-    var results = await webSearch(query);
-    res.json({ results: results, query: query });
-  } catch(e) {
-    console.log("Search-AI ERR:", e.message);
-    res.status(500).json({ error: e.message });
-  }
-});
 
 /* ───── MAIN WEATHER ROUTE ───── */
 app.get("/api/weather", async function(req,res){
