@@ -21,13 +21,15 @@ var accuForecastCache    = {};
 var recommendationsCache = {};
 var monthlyCache         = {};
 var openMeteoCurrentCache = {};
+var openMeteoHourlyCache  = {};
 
-var GENERAL_CACHE_MS         = 10 * 60 * 1000;
-var ACCU_LOCATION_CACHE_MS   = 7 * 24 * 60 * 60 * 1000;
-var ACCU_FORECAST_CACHE_MS   = 6 * 60 * 60 * 1000;
-var RECOMMENDATIONS_CACHE_MS = 60 * 60 * 1000;
-var MONTHLY_CACHE_MS         = 24 * 60 * 60 * 1000;
+var GENERAL_CACHE_MS          = 10 * 60 * 1000;
+var ACCU_LOCATION_CACHE_MS    = 7 * 24 * 60 * 60 * 1000;
+var ACCU_FORECAST_CACHE_MS    = 6 * 60 * 60 * 1000;
+var RECOMMENDATIONS_CACHE_MS  = 60 * 60 * 1000;
+var MONTHLY_CACHE_MS          = 24 * 60 * 60 * 1000;
 var OPENMETEO_CURRENT_CACHE_MS = 10 * 60 * 1000;
+var OPENMETEO_HOURLY_CACHE_MS  = 10 * 60 * 1000;
 
 function getCached(store, key, maxAge) {
   var entry = store[key];
@@ -133,6 +135,12 @@ function getLocalHour(epochSec, tz) {
     }
   } catch (e) {}
   return new Date(epochSec * 1000).getUTCHours();
+}
+
+function getLocalHourFromISO(isoStr) {
+  if (!isoStr || isoStr.length < 13) return 12;
+  var hh = parseInt(isoStr.substring(11, 13), 10);
+  return isNaN(hh) ? 12 : hh;
 }
 
 function getIsDayNow(tz) {
@@ -293,38 +301,69 @@ function computeStormProbability(precipProb, cloudCover, cape) {
   return roundVal(Math.min(100, sp));
 }
 
-/* ───── HOURLY from Pirate Weather ───── */
+/* ───── HOURLY from Open-Meteo (with current temp/code override for "Now") ───── */
 
-function buildHourlyFromPirate(prData, currentTemp, currentWeatherCode, tz) {
+function buildHourlyFromOpenMeteo(omHourlyData, currentTemp, currentWeatherCode, currentIsDay) {
   var out = { time: [], temperature_2m: [], weather_code: [], is_day: [] };
-  if (!prData || !prData.hourly || !prData.hourly.data || !prData.hourly.data.length) return out;
+
+  if (!omHourlyData || !omHourlyData.hourly || !omHourlyData.hourly.time || !omHourlyData.hourly.time.length) {
+    // Fallback: at least return "Now" with current data
+    if (currentTemp != null) {
+      out.time.push(new Date().toISOString().substring(0, 16) + ":00");
+      out.temperature_2m.push(roundVal(currentTemp));
+      out.weather_code.push(currentWeatherCode || 0);
+      out.is_day.push(currentIsDay != null ? currentIsDay : 1);
+    }
+    return out;
+  }
+
+  var h = omHourlyData.hourly;
+  var now = new Date();
+  var nowHour = now.getHours();
+  var todayDateStr = now.toISOString().substring(0, 10);
+
+  // Find the starting index (current hour or next available)
+  var startIdx = 0;
+  for (var s = 0; s < h.time.length; s++) {
+    var slotDate = h.time[s].substring(0, 10);
+    var slotHour = parseInt(h.time[s].substring(11, 13), 10);
+    if (slotDate === todayDateStr && slotHour >= nowHour) {
+      startIdx = s;
+      break;
+    } else if (slotDate > todayDateStr) {
+      startIdx = s;
+      break;
+    }
+  }
 
   var added = 0;
-  for (var i = 0; i < prData.hourly.data.length && added < 24; i++) {
-    var h = prData.hourly.data[i];
-    var localISO  = epochToLocalISO(h.time, tz);
-    var localHour = getLocalHour(h.time, tz);
-    var isDay     = (localHour >= 6 && localHour < 20) ? 1 : 0;
+  for (var i = startIdx; i < h.time.length && added < 24; i++) {
+    var timeStr = h.time[i];
+    var temp = h.temperature_2m ? h.temperature_2m[i] : null;
+    var code = h.weather_code ? h.weather_code[i] : 0;
+    var isDay = h.is_day ? h.is_day[i] : 1;
 
-    if (i === 0) {
-      out.time.push(localISO);
-      out.temperature_2m.push(currentTemp != null ? roundVal(currentTemp) : roundVal(h.temperature));
-      out.weather_code.push(currentWeatherCode != null ? currentWeatherCode : pirateToWMO(h.icon));
-      out.is_day.push(isDay);
+    if (added === 0) {
+      // First slot = "Now" — use current conditions from Pirate Weather
+      out.time.push(timeStr);
+      out.temperature_2m.push(currentTemp != null ? roundVal(currentTemp) : roundVal(temp));
+      out.weather_code.push(currentWeatherCode != null ? currentWeatherCode : code);
+      out.is_day.push(currentIsDay != null ? currentIsDay : isDay);
     } else {
-      out.time.push(localISO);
-      out.temperature_2m.push(roundVal(h.temperature));
-      out.weather_code.push(pirateToWMO(h.icon));
+      out.time.push(timeStr);
+      out.temperature_2m.push(roundVal(temp));
+      out.weather_code.push(code);
       out.is_day.push(isDay);
     }
     added++;
   }
+
   return out;
 }
 
-/* ───── TIME PERIODS from Pirate hourly ───── */
+/* ───── TIME PERIODS from Open-Meteo hourly ───── */
 
-function buildTimePeriodsFromPirate(prData, tz) {
+function buildTimePeriodsFromOpenMeteo(omHourlyData, currentTemp, currentWeatherCode, tz) {
   var periods = [
     { name: "Morning",   startH: 6,  endH: 12 },
     { name: "Afternoon", startH: 12, endH: 17 },
@@ -332,55 +371,83 @@ function buildTimePeriodsFromPirate(prData, tz) {
     { name: "Overnight", startH: 21, endH: 30 }
   ];
 
-  if (!prData || !prData.hourly || !prData.hourly.data) {
+  if (!omHourlyData || !omHourlyData.hourly || !omHourlyData.hourly.time) {
     return periods.map(function (p) {
       return { name: p.name, temp: null, weather_code: 0, precip_chance: null, has_data: false };
     });
   }
 
-  var nowEpoch     = Math.floor(Date.now() / 1000);
-  var todayLocal   = epochToLocalISO(nowEpoch, tz).substring(0, 10);
-  var nowLocalHour = getLocalHour(nowEpoch, tz);
-  var tmrwDate     = epochToLocalISO(nowEpoch + 86400, tz).substring(0, 10);
+  var h = omHourlyData.hourly;
+  var now = new Date();
+  var todayDateStr = now.toISOString().substring(0, 10);
+  var nowHour = now.getHours();
 
-  var allHours = prData.hourly.data.map(function (h) {
-    return {
-      localDate: epochToLocalISO(h.time, tz).substring(0, 10),
-      localHour: getLocalHour(h.time, tz),
-      temp:      roundVal(h.temperature),
-      code:      pirateToWMO(h.icon),
-      precip:    h.precipProbability != null ? Math.round(h.precipProbability * 100) : null
-    };
-  });
+  // Build tomorrow's date string
+  var tmrw = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+  var tmrwDateStr = tmrw.toISOString().substring(0, 10);
+
+  // Parse all hourly data into a structured format
+  var allHours = [];
+  for (var i = 0; i < h.time.length; i++) {
+    var timeStr = h.time[i];
+    var localDate = timeStr.substring(0, 10);
+    var localHour = parseInt(timeStr.substring(11, 13), 10);
+
+    allHours.push({
+      localDate: localDate,
+      localHour: localHour,
+      temp: h.temperature_2m ? roundVal(h.temperature_2m[i]) : null,
+      code: h.weather_code ? h.weather_code[i] : 0,
+      precip: h.precipitation_probability ? h.precipitation_probability[i] : null
+    });
+  }
 
   return periods.map(function (per) {
     var temps = [], codes = {}, precips = [];
 
     allHours.forEach(function (ah) {
       var inPeriod = false;
+
       if (per.name === "Overnight") {
-        if ((ah.localDate === todayLocal && ah.localHour >= 21) ||
-            (ah.localDate === tmrwDate   && ah.localHour < 6)) inPeriod = true;
+        // Overnight spans today 21:00 to tomorrow 05:59
+        if ((ah.localDate === todayDateStr && ah.localHour >= 21) ||
+            (ah.localDate === tmrwDateStr && ah.localHour < 6)) {
+          inPeriod = true;
+        }
       } else {
-        var targetDate = todayLocal;
-        if (per.endH <= nowLocalHour) targetDate = tmrwDate;
-        if (ah.localDate === targetDate && ah.localHour >= per.startH && ah.localHour < per.endH) inPeriod = true;
+        // For other periods, check if the period has already passed today
+        var targetDate = todayDateStr;
+        if (per.endH <= nowHour) {
+          targetDate = tmrwDateStr; // Period already passed, show tomorrow's
+        }
+
+        if (ah.localDate === targetDate && ah.localHour >= per.startH && ah.localHour < per.endH) {
+          inPeriod = true;
+        }
       }
+
       if (inPeriod) {
-        if (ah.temp  != null) temps.push(ah.temp);
-        if (ah.code  != null) codes[ah.code] = (codes[ah.code] || 0) + 1;
+        if (ah.temp != null) temps.push(ah.temp);
+        if (ah.code != null) codes[ah.code] = (codes[ah.code] || 0) + 1;
         if (ah.precip != null) precips.push(ah.precip);
       }
     });
 
-    var avgTemp   = temps.length   ? Math.round(temps.reduce(function (a, b) { return a + b; }, 0) / temps.length) : null;
+    var avgTemp = temps.length ? Math.round(temps.reduce(function (a, b) { return a + b; }, 0) / temps.length) : null;
     var avgPrecip = precips.length ? Math.round(precips.reduce(function (a, b) { return a + b; }, 0) / precips.length) : null;
+
     var dominantCode = 0, maxCount = 0;
     Object.keys(codes).forEach(function (k) {
       if (codes[k] > maxCount) { maxCount = codes[k]; dominantCode = Number(k); }
     });
 
-    return { name: per.name, temp: avgTemp, weather_code: dominantCode, precip_chance: avgPrecip, has_data: temps.length > 0 };
+    return {
+      name: per.name,
+      temp: avgTemp,
+      weather_code: dominantCode,
+      precip_chance: avgPrecip,
+      has_data: temps.length > 0
+    };
   });
 }
 
@@ -638,7 +705,7 @@ function fetchTomorrowCurrent(loc) {
 function fetchPirate(loc) {
   return sf(
     "https://api.pirateweather.net/forecast/" + PIRATE_KEY +
-    "/" + loc.lat + "," + loc.lon + "?units=si&extend=hourly",
+    "/" + loc.lat + "," + loc.lon + "?units=si",
     "Pirate"
   );
 }
@@ -658,6 +725,26 @@ function fetchOpenMeteoCurrent(loc) {
     "OpenMeteoCurrent"
   ).then(function (data) {
     if (data) setCached(openMeteoCurrentCache, cacheKey, data);
+    return data;
+  });
+}
+
+function fetchOpenMeteoHourly(loc) {
+  var cacheKey = makeCK(loc.lat, loc.lon);
+  var cached = getCached(openMeteoHourlyCache, cacheKey, OPENMETEO_HOURLY_CACHE_MS);
+  if (cached) {
+    console.log("Open-Meteo hourly cache hit:", cacheKey);
+    return Promise.resolve(cached);
+  }
+
+  return sf(
+    "https://api.open-meteo.com/v1/forecast?latitude=" + loc.lat +
+    "&longitude=" + loc.lon +
+    "&hourly=temperature_2m,weather_code,precipitation_probability,is_day" +
+    "&forecast_days=2&timezone=auto",
+    "OpenMeteoHourly"
+  ).then(function (data) {
+    if (data) setCached(openMeteoHourlyCache, cacheKey, data);
     return data;
   });
 }
@@ -731,22 +818,24 @@ app.get("/api/weather", async function (req, res) {
 
     console.log("\n=== Fetching for:", loc.name, loc.lat, loc.lon, "===");
 
-    // 6 API calls total (added Open-Meteo for feels-like)
+    // 7 API calls total
     var results = await Promise.all([
-      fetchWeatherApi(loc),
-      fetchTomorrowCurrent(loc),
-      fetchPirate(loc),
-      fetchAccuForecast(loc),
-      fetchCheckWX(loc),
-      fetchOpenMeteoCurrent(loc)
+      fetchWeatherApi(loc),        // [0]
+      fetchTomorrowCurrent(loc),   // [1]
+      fetchPirate(loc),            // [2] - for current conditions + days 6-7
+      fetchAccuForecast(loc),      // [3]
+      fetchCheckWX(loc),           // [4]
+      fetchOpenMeteoCurrent(loc),  // [5] - for feels-like
+      fetchOpenMeteoHourly(loc)    // [6] - for hourly forecast
     ]);
 
-    var waData       = results[0];
-    var tmData       = results[1];
-    var prData       = results[2];
-    var accuData     = results[3];
-    var checkwxData  = results[4];
-    var omCurrentData = results[5];
+    var waData         = results[0];
+    var tmData         = results[1];
+    var prData         = results[2];
+    var accuData       = results[3];
+    var checkwxData    = results[4];
+    var omCurrentData  = results[5];
+    var omHourlyData   = results[6];
 
     if (!waData) return res.status(503).json({ error: "Primary weather API unavailable" });
 
@@ -781,11 +870,15 @@ app.get("/api/weather", async function (req, res) {
       waCurr.feelslike_c
     );
 
+    console.log("Current source: Pirate Weather (" + currentTemp + "°C, code " + weatherCode + ")");
     console.log("Feels-like source:", omCurrent.apparent_temperature != null ? "Open-Meteo (" + omCurrent.apparent_temperature + "°C)" : "WeatherAPI fallback (" + waCurr.feelslike_c + "°C)");
+    console.log("Hourly source: Open-Meteo (with Pirate current override for 'Now')");
 
-    // Hourly + time periods — from Pirate Weather
-    var hourly      = buildHourlyFromPirate(prData, currentTemp, weatherCode, tz);
-    var timePeriods = buildTimePeriodsFromPirate(prData, tz);
+    // Hourly from Open-Meteo, with current temp/code from Pirate for "Now" slot
+    var hourly = buildHourlyFromOpenMeteo(omHourlyData, currentTemp, weatherCode, currentIsDay);
+
+    // Time periods from Open-Meteo hourly
+    var timePeriods = buildTimePeriodsFromOpenMeteo(omHourlyData, currentTemp, weatherCode, tz);
 
     // 7-day — AccuWeather (days 1-5) + Pirate (days 6-7)
     var dailyArray = buildDaily(accuData, prData);
