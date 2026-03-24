@@ -156,6 +156,47 @@ function getIsDayNow(tz) {
   } catch (e) { return 1; }
 }
 
+/* ───── Get current local date and hour for a timezone ───── */
+
+function getLocalNow(tz) {
+  try {
+    var now = new Date();
+    var parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23"
+    }).formatToParts(now);
+
+    var yy = "", mm = "", dd = "", hh = "", mi = "";
+    for (var i = 0; i < parts.length; i++) {
+      if (parts[i].type === "year")   yy = parts[i].value;
+      if (parts[i].type === "month")  mm = parts[i].value;
+      if (parts[i].type === "day")    dd = parts[i].value;
+      if (parts[i].type === "hour")   hh = parts[i].value;
+      if (parts[i].type === "minute") mi = parts[i].value;
+    }
+
+    return {
+      dateStr: yy + "-" + mm + "-" + dd,
+      hour: parseInt(hh, 10),
+      minute: parseInt(mi, 10),
+      fullStr: yy + "-" + mm + "-" + dd + "T" + hh + ":" + mi + ":00"
+    };
+  } catch (e) {
+    var fallback = new Date();
+    return {
+      dateStr: fallback.toISOString().substring(0, 10),
+      hour: fallback.getUTCHours(),
+      minute: fallback.getUTCMinutes(),
+      fullStr: fallback.toISOString().substring(0, 19)
+    };
+  }
+}
+
 /* ───── CONVERTERS ───── */
 
 function waCodeToWMO(c) {
@@ -303,13 +344,14 @@ function computeStormProbability(precipProb, cloudCover, cape) {
 
 /* ───── HOURLY from Open-Meteo (with current temp/code override for "Now") ───── */
 
-function buildHourlyFromOpenMeteo(omHourlyData, currentTemp, currentWeatherCode, currentIsDay) {
+function buildHourlyFromOpenMeteo(omHourlyData, currentTemp, currentWeatherCode, currentIsDay, tz) {
   var out = { time: [], temperature_2m: [], weather_code: [], is_day: [] };
 
   if (!omHourlyData || !omHourlyData.hourly || !omHourlyData.hourly.time || !omHourlyData.hourly.time.length) {
     // Fallback: at least return "Now" with current data
     if (currentTemp != null) {
-      out.time.push(new Date().toISOString().substring(0, 16) + ":00");
+      var localNow = getLocalNow(tz);
+      out.time.push(localNow.dateStr + "T" + String(localNow.hour).padStart(2, "0") + ":00");
       out.temperature_2m.push(roundVal(currentTemp));
       out.weather_code.push(currentWeatherCode || 0);
       out.is_day.push(currentIsDay != null ? currentIsDay : 1);
@@ -318,23 +360,58 @@ function buildHourlyFromOpenMeteo(omHourlyData, currentTemp, currentWeatherCode,
   }
 
   var h = omHourlyData.hourly;
-  var now = new Date();
-  var nowHour = now.getHours();
-  var todayDateStr = now.toISOString().substring(0, 10);
+
+  // Get local time in the location's timezone
+  var localNow = getLocalNow(tz);
+  var nowDateStr = localNow.dateStr;
+  var nowHour = localNow.hour;
+
+  console.log("Hourly build - Local now:", nowDateStr, "hour:", nowHour, "tz:", tz);
 
   // Find the starting index (current hour or next available)
   var startIdx = 0;
+  var foundStart = false;
+
   for (var s = 0; s < h.time.length; s++) {
-    var slotDate = h.time[s].substring(0, 10);
-    var slotHour = parseInt(h.time[s].substring(11, 13), 10);
-    if (slotDate === todayDateStr && slotHour >= nowHour) {
+    var slotTimeStr = h.time[s]; // Format: "2025-01-15T14:00"
+    var slotDate = slotTimeStr.substring(0, 10);
+    var slotHour = parseInt(slotTimeStr.substring(11, 13), 10);
+
+    // Find the slot matching current local date and hour (or first future slot)
+    if (slotDate === nowDateStr && slotHour === nowHour) {
       startIdx = s;
+      foundStart = true;
+      console.log("Found exact match at index", s, ":", slotTimeStr);
       break;
-    } else if (slotDate > todayDateStr) {
+    } else if (slotDate === nowDateStr && slotHour > nowHour) {
+      // If we passed the current hour (shouldn't happen), use next available
       startIdx = s;
+      foundStart = true;
+      console.log("Found next hour at index", s, ":", slotTimeStr);
+      break;
+    } else if (slotDate > nowDateStr) {
+      // We've gone past today, use this as fallback
+      startIdx = s;
+      foundStart = true;
+      console.log("Found next day at index", s, ":", slotTimeStr);
       break;
     }
   }
+
+  // If no match found, try to find closest hour
+  if (!foundStart) {
+    for (var f = 0; f < h.time.length; f++) {
+      var fSlotDate = h.time[f].substring(0, 10);
+      var fSlotHour = parseInt(h.time[f].substring(11, 13), 10);
+      if (fSlotDate === nowDateStr && fSlotHour >= nowHour) {
+        startIdx = f;
+        foundStart = true;
+        break;
+      }
+    }
+  }
+
+  console.log("Starting from index", startIdx, ":", h.time[startIdx]);
 
   var added = 0;
   for (var i = startIdx; i < h.time.length && added < 24; i++) {
@@ -349,6 +426,7 @@ function buildHourlyFromOpenMeteo(omHourlyData, currentTemp, currentWeatherCode,
       out.temperature_2m.push(currentTemp != null ? roundVal(currentTemp) : roundVal(temp));
       out.weather_code.push(currentWeatherCode != null ? currentWeatherCode : code);
       out.is_day.push(currentIsDay != null ? currentIsDay : isDay);
+      console.log("Now slot:", timeStr, "temp:", currentTemp != null ? currentTemp : temp);
     } else {
       out.time.push(timeStr);
       out.temperature_2m.push(roundVal(temp));
@@ -357,6 +435,8 @@ function buildHourlyFromOpenMeteo(omHourlyData, currentTemp, currentWeatherCode,
     }
     added++;
   }
+
+  console.log("Built", added, "hourly slots, first:", out.time[0], "last:", out.time[out.time.length - 1]);
 
   return out;
 }
@@ -378,13 +458,21 @@ function buildTimePeriodsFromOpenMeteo(omHourlyData, currentTemp, currentWeather
   }
 
   var h = omHourlyData.hourly;
-  var now = new Date();
-  var todayDateStr = now.toISOString().substring(0, 10);
-  var nowHour = now.getHours();
+
+  // Get local time in location's timezone
+  var localNow = getLocalNow(tz);
+  var todayDateStr = localNow.dateStr;
+  var nowHour = localNow.hour;
 
   // Build tomorrow's date string
-  var tmrw = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-  var tmrwDateStr = tmrw.toISOString().substring(0, 10);
+  var tmrw = new Date();
+  tmrw.setDate(tmrw.getDate() + 1);
+  var tmrwLocalNow = getLocalNow(tz);
+  // Actually compute tomorrow properly
+  var todayParts = todayDateStr.split("-");
+  var todayDate = new Date(parseInt(todayParts[0]), parseInt(todayParts[1]) - 1, parseInt(todayParts[2]));
+  todayDate.setDate(todayDate.getDate() + 1);
+  var tmrwDateStr = todayDate.toISOString().substring(0, 10);
 
   // Parse all hourly data into a structured format
   var allHours = [];
@@ -870,12 +958,13 @@ app.get("/api/weather", async function (req, res) {
       waCurr.feelslike_c
     );
 
+    console.log("Timezone:", tz);
     console.log("Current source: Pirate Weather (" + currentTemp + "°C, code " + weatherCode + ")");
     console.log("Feels-like source:", omCurrent.apparent_temperature != null ? "Open-Meteo (" + omCurrent.apparent_temperature + "°C)" : "WeatherAPI fallback (" + waCurr.feelslike_c + "°C)");
     console.log("Hourly source: Open-Meteo (with Pirate current override for 'Now')");
 
     // Hourly from Open-Meteo, with current temp/code from Pirate for "Now" slot
-    var hourly = buildHourlyFromOpenMeteo(omHourlyData, currentTemp, weatherCode, currentIsDay);
+    var hourly = buildHourlyFromOpenMeteo(omHourlyData, currentTemp, weatherCode, currentIsDay, tz);
 
     // Time periods from Open-Meteo hourly
     var timePeriods = buildTimePeriodsFromOpenMeteo(omHourlyData, currentTemp, weatherCode, tz);
