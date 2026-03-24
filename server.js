@@ -20,12 +20,14 @@ var accuLocationCache    = {};
 var accuForecastCache    = {};
 var recommendationsCache = {};
 var monthlyCache         = {};
+var openMeteoCurrentCache = {};
 
 var GENERAL_CACHE_MS         = 10 * 60 * 1000;
 var ACCU_LOCATION_CACHE_MS   = 7 * 24 * 60 * 60 * 1000;
 var ACCU_FORECAST_CACHE_MS   = 6 * 60 * 60 * 1000;
 var RECOMMENDATIONS_CACHE_MS = 60 * 60 * 1000;
 var MONTHLY_CACHE_MS         = 24 * 60 * 60 * 1000;
+var OPENMETEO_CURRENT_CACHE_MS = 10 * 60 * 1000;
 
 function getCached(store, key, maxAge) {
   var entry = store[key];
@@ -221,6 +223,16 @@ function parseTomorrowCurrent(tmData) {
     if (intervals.length && intervals[0].values) {
       vals.cloudCover = intervals[0].values.cloudCover;
       vals.dewPoint   = intervals[0].values.dewPoint;
+    }
+  }
+  return vals;
+}
+
+function parseOpenMeteoCurrent(omData) {
+  var vals = { apparent_temperature: null };
+  if (omData && omData.current) {
+    if (omData.current.apparent_temperature != null) {
+      vals.apparent_temperature = omData.current.apparent_temperature;
     }
   }
   return vals;
@@ -631,6 +643,25 @@ function fetchPirate(loc) {
   );
 }
 
+function fetchOpenMeteoCurrent(loc) {
+  var cacheKey = makeCK(loc.lat, loc.lon);
+  var cached = getCached(openMeteoCurrentCache, cacheKey, OPENMETEO_CURRENT_CACHE_MS);
+  if (cached) {
+    console.log("Open-Meteo current cache hit:", cacheKey);
+    return Promise.resolve(cached);
+  }
+
+  return sf(
+    "https://api.open-meteo.com/v1/forecast?latitude=" + loc.lat +
+    "&longitude=" + loc.lon +
+    "&current=apparent_temperature&timezone=auto",
+    "OpenMeteoCurrent"
+  ).then(function (data) {
+    if (data) setCached(openMeteoCurrentCache, cacheKey, data);
+    return data;
+  });
+}
+
 async function fetchAccuForecast(loc) {
   try {
     var locKey    = makeCK(loc.lat, loc.lon);
@@ -700,20 +731,22 @@ app.get("/api/weather", async function (req, res) {
 
     console.log("\n=== Fetching for:", loc.name, loc.lat, loc.lon, "===");
 
-    // 5 API calls total (down from 15)
+    // 6 API calls total (added Open-Meteo for feels-like)
     var results = await Promise.all([
       fetchWeatherApi(loc),
       fetchTomorrowCurrent(loc),
       fetchPirate(loc),
       fetchAccuForecast(loc),
-      fetchCheckWX(loc)
+      fetchCheckWX(loc),
+      fetchOpenMeteoCurrent(loc)
     ]);
 
-    var waData      = results[0];
-    var tmData      = results[1];
-    var prData      = results[2];
-    var accuData    = results[3];
-    var checkwxData = results[4];
+    var waData       = results[0];
+    var tmData       = results[1];
+    var prData       = results[2];
+    var accuData     = results[3];
+    var checkwxData  = results[4];
+    var omCurrentData = results[5];
 
     if (!waData) return res.status(503).json({ error: "Primary weather API unavailable" });
 
@@ -722,10 +755,11 @@ app.get("/api/weather", async function (req, res) {
     var tz     = waLoc.tz_id || "UTC";
 
     var tmCurrent          = parseTomorrowCurrent(tmData);
+    var omCurrent          = parseOpenMeteoCurrent(omCurrentData);
     var checkwxCeilingFeet = parseCheckWXCeiling(checkwxData);
     var accuPollen         = parseAccuPollen(accuData);
 
-   // Current conditions — Pirate Weather primary, WeatherAPI as fallback
+    // Current conditions — Pirate Weather primary, WeatherAPI as fallback
     var pirCurr = prData && prData.currently ? prData.currently : {};
 
     var currentTemp = first(
@@ -740,6 +774,14 @@ app.get("/api/weather", async function (req, res) {
 
     var currentIsDay  = first(waCurr.is_day, getIsDayNow(tz));
     var conditionText = getWeatherText(weatherCode, currentIsDay);
+
+    // Feels-like from Open-Meteo (primary), WeatherAPI as fallback
+    var feelsLikeTemp = first(
+      omCurrent.apparent_temperature,
+      waCurr.feelslike_c
+    );
+
+    console.log("Feels-like source:", omCurrent.apparent_temperature != null ? "Open-Meteo (" + omCurrent.apparent_temperature + "°C)" : "WeatherAPI fallback (" + waCurr.feelslike_c + "°C)");
 
     // Hourly + time periods — from Pirate Weather
     var hourly      = buildHourlyFromPirate(prData, currentTemp, weatherCode, tz);
@@ -764,9 +806,9 @@ app.get("/api/weather", async function (req, res) {
     // Storm probability
     var stormProbability = computeStormProbability(rainChance, tmCurrent.cloudCover, null);
 
-    // Sky metrics
+    // Sky metrics — RealFeel Shade now derived from Open-Meteo feels-like
     var skyMetrics = {
-      realfeel_shade:      waCurr.feelslike_c != null ? roundVal(waCurr.feelslike_c - 3) : null,
+      realfeel_shade:      feelsLikeTemp != null ? roundVal(feelsLikeTemp - 3) : null,
       cloud_cover:         roundVal(tmCurrent.cloudCover),
       cloud_base:          checkwxCeilingFeet != null ? roundVal(checkwxCeilingFeet / 3280.84) : null,
       thunder_probability: stormProbability,
@@ -801,12 +843,12 @@ app.get("/api/weather", async function (req, res) {
       }
     }
 
-    // Gemini recommendations
+    // Gemini recommendations — uses Open-Meteo feels-like
     var recommendations = await buildRecommendations({
       locationName:        loc.name,
       conditionText:       conditionText,
       currentTemp:         roundVal(currentTemp),
-      realFeel:            roundVal(waCurr.feelslike_c),
+      realFeel:            roundVal(feelsLikeTemp),
       rainChance:          rainChance,
       uv:                  waCurr.uv,
       aqi:                 pm25,
@@ -835,7 +877,7 @@ app.get("/api/weather", async function (req, res) {
         weather_code:     weatherCode,
         condition_text:   conditionText,
         is_day:           currentIsDay,
-        feelslike_c:      roundVal(waCurr.feelslike_c),
+        feelslike_c:      roundVal(feelsLikeTemp),
         humidity:         waCurr.humidity,
         wind_kph:         waCurr.wind_kph,
         wind_degree:      waCurr.wind_degree,
